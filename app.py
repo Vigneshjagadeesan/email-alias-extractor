@@ -4,11 +4,78 @@ from bs4 import BeautifulSoup
 import re
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
+import urllib.parse
+import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Ultra-Fast Email & Contact Extractor", page_icon="⚡", layout="wide")
+st.set_page_config(
+    page_title="Website Email & Contact Extractor",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-st.title("⚡ Ultra-Fast Email & Contact Number Extractor")
-st.markdown("Extract ALL public Email Addresses and Phone/Contact Numbers found on target website pages at high speed.")
+# Custom JavaScript to Disable Right Click & Inspect Element Shortcuts
+components.html("""
+    <script>
+    // Disable Right Click
+    document.addEventListener('contextmenu', function(e) {
+        e.preventDefault();
+    }, false);
+
+    // Disable Keyboard Inspection Shortcuts
+    document.addEventListener('keydown', function(e) {
+        // F12 key
+        if (e.keyCode == 123) {
+            e.preventDefault();
+            return false;
+        }
+        // Ctrl+Shift+I (Inspect)
+        if (e.ctrlKey && e.shiftKey && e.keyCode == 73) {
+            e.preventDefault();
+            return false;
+        }
+        // Ctrl+Shift+J (Console)
+        if (e.ctrlKey && e.shiftKey && e.keyCode == 74) {
+            e.preventDefault();
+            return false;
+        }
+        // Ctrl+U (View Source)
+        if (e.ctrlKey && e.keyCode == 85) {
+            e.preventDefault();
+            return false;
+        }
+        // Ctrl+S (Save Page)
+        if (e.ctrlKey && e.keyCode == 83) {
+            e.preventDefault();
+            return false;
+        }
+    }, false);
+    </script>
+""", height=0)
+
+# Custom CSS for Mobile & Desktop Responsive Design
+st.markdown("""
+    <style>
+    .main .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+        max-width: 100%;
+    }
+    .stButton>button {
+        width: 100%;
+        border-radius: 8px;
+        height: 3em;
+        font-weight: bold;
+    }
+    @media (max-width: 768px) {
+        .stTextArea textarea {
+            font-size: 14px;
+        }
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+st.title("Website Email & Contact Extractor")
+st.markdown("Extract ALL public Email Addresses and Phone/Contact Numbers with mobile & desktop friendly one-click actions.")
 
 domains_input = st.text_area("Enter Target Domains (One per line)", value="l-bank.de", height=120)
 
@@ -91,7 +158,7 @@ if st.button("Start Extraction", type="primary"):
                 
         generic_prefixes = ['info', 'contact', 'kontakt', 'support', 'presse', 'service', 'help', 'sales', 'admin', 'office', 'post', 'mail']
         
-        # Email Classification
+        # Email Classification & Link Generation
         for email in domain_emails:
             prefix = email.split('@')[0]
             if email.endswith(f"@{domain}"):
@@ -99,17 +166,23 @@ if st.button("Start Extraction", type="primary"):
             else:
                 category = "External / Other Email"
                 
+            gmail_link = f"https://mail.google.com/mail/?view=cm&fs=1&to={urllib.parse.quote(email)}"
+            
             all_emails.append({
                 "Target Domain": domain,
                 "Email Address": email,
+                "Compose in Gmail": gmail_link,
                 "Type": category
             })
             
-        # Phone Numbers
+        # Phone Numbers & Link Generation
         for phone in domain_phones:
+            clean_digits = re.sub(r'[^0-9+]', '', phone)
+            tel_link = f"tel:{clean_digits}"
             all_phones.append({
                 "Target Domain": domain,
-                "Phone Number": phone
+                "Phone Number": phone,
+                "Click to Call": tel_link
             })
 
     status_text.text("Extraction Complete!")
@@ -117,34 +190,43 @@ if st.button("Start Extraction", type="primary"):
     st.session_state['emails_df'] = pd.DataFrame(all_emails).drop_duplicates(subset=['Email Address']) if all_emails else pd.DataFrame()
     st.session_state['phones_df'] = pd.DataFrame(all_phones).drop_duplicates(subset=['Phone Number']) if all_phones else pd.DataFrame()
 
-# --- DISPLAY TABS & DOWNLOAD SECTION ---
+# --- DISPLAY TABS SECTION ---
 if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
     
-    tab1, tab2 = st.tabs(["📧 Extracted Emails", "📞 Contact / Phone Numbers"])
+    tab1, tab2 = st.tabs(["Extracted Emails", "Contact / Phone Numbers"])
     
     # EMAIL TAB
     with tab1:
         if 'emails_df' in st.session_state and not st.session_state['emails_df'].empty:
-            df_e = st.session_state['emails_df']
+            df_e = st.session_state['emails_df'].copy()
             st.success(f"Found {len(df_e)} total email addresses!")
             
             type_filter = st.selectbox("Filter Emails:", ["All Emails", "Official Department Alias", "Official Direct Staff Email", "External / Other Email"])
             filtered_df_e = df_e if type_filter == "All Emails" else df_e[df_e['Type'] == type_filter]
             
-            st.dataframe(filtered_df_e, use_container_width=True)
+            st.dataframe(
+                filtered_df_e,
+                column_config={
+                    "Compose in Gmail": st.column_config.LinkColumn(
+                        "Open Gmail Compose",
+                        help="Click to open web Gmail compose tab with this email ID.",
+                        display_text="Compose"
+                    )
+                },
+                use_container_width=True
+            )
             
-            # Download Email Button
-            csv_emails = filtered_df_e.to_csv(index=False).encode('utf-8')
+            # Download Button
+            csv_emails = filtered_df_e[['Target Domain', 'Email Address', 'Type']].to_csv(index=False).encode('utf-8')
             st.download_button(
-                label="📥 Download Extracted Emails as CSV",
+                label="Download Extracted Emails (CSV)",
                 data=csv_emails,
                 file_name="extracted_emails.csv",
-                mime="text/csv",
-                type="secondary"
+                mime="text/csv"
             )
             
             st.markdown("---")
-            st.subheader("📋 Copy Email List")
+            st.subheader("Copy Plain Email List")
             email_list_str = "\n".join(filtered_df_e['Email Address'].tolist())
             st.code(email_list_str, language="text")
         else:
@@ -153,23 +235,32 @@ if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
     # PHONE TAB
     with tab2:
         if 'phones_df' in st.session_state and not st.session_state['phones_df'].empty:
-            df_p = st.session_state['phones_df']
+            df_p = st.session_state['phones_df'].copy()
             st.success(f"Found {len(df_p)} total phone/contact numbers!")
             
-            st.dataframe(df_p, use_container_width=True)
+            st.dataframe(
+                df_p,
+                column_config={
+                    "Click to Call": st.column_config.LinkColumn(
+                        "Call Number",
+                        help="Tap/click to trigger dialer on mobile or desktop phone app.",
+                        display_text="Call"
+                    )
+                },
+                use_container_width=True
+            )
             
-            # Download Phone Button
-            csv_phones = df_p.to_csv(index=False).encode('utf-8')
+            # Download Button
+            csv_phones = df_p[['Target Domain', 'Phone Number']].to_csv(index=False).encode('utf-8')
             st.download_button(
-                label="📥 Download Contact Numbers as CSV",
+                label="Download Contact Numbers (CSV)",
                 data=csv_phones,
                 file_name="extracted_phone_numbers.csv",
-                mime="text/csv",
-                type="secondary"
+                mime="text/csv"
             )
             
             st.markdown("---")
-            st.subheader("📋 Copy Phone List")
+            st.subheader("Copy Plain Phone List")
             phone_list_str = "\n".join(df_p['Phone Number'].tolist())
             st.code(phone_list_str, language="text")
         else:

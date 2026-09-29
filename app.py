@@ -13,7 +13,6 @@ st.markdown("Extract ALL public Email Addresses and Phone/Contact Numbers found 
 domains_input = st.text_area("Enter Target Domains (One per line)", value="l-bank.de", height=120)
 
 EMAIL_PATTERN = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
-# Regex to match international and local phone number formats
 PHONE_PATTERN = r'(?:\+\d{1,3}[\s\-\.]?)?\(?\d{2,5}\)?[\s\-\.]?\d{3,5}[\s\-\.]?\d{3,5}'
 
 SUB_PATHS = [
@@ -50,7 +49,7 @@ def fetch_and_extract_data(args):
                     if '@' in mail:
                         found_emails.add(mail)
                         
-            # 2. Extract Phone Numbers (from tel: links & text)
+            # 2. Extract Phone Numbers
             for a_tag in soup.find_all('a', href=True):
                 if 'tel:' in a_tag['href']:
                     phone = a_tag['href'].replace('tel:', '').strip()
@@ -60,7 +59,6 @@ def fetch_and_extract_data(args):
             phone_matches = re.findall(PHONE_PATTERN, text_content)
             for phone in phone_matches:
                 clean_phone = phone.strip()
-                # Clean invalid numbers (like dates, small digits)
                 digits_only = re.sub(r'\D', '', clean_phone)
                 if 7 <= len(digits_only) <= 15:
                     found_phones.add(clean_phone)
@@ -119,7 +117,7 @@ if st.button("Start Extraction", type="primary"):
     st.session_state['emails_df'] = pd.DataFrame(all_emails).drop_duplicates(subset=['Email Address']) if all_emails else pd.DataFrame()
     st.session_state['phones_df'] = pd.DataFrame(all_phones).drop_duplicates(subset=['Phone Number']) if all_phones else pd.DataFrame()
 
-# --- DISPLAY TABS SECTION ---
+# --- DISPLAY TABS & DOWNLOAD SECTION ---
 if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
     
     tab1, tab2 = st.tabs(["📧 Extracted Emails", "📞 Contact / Phone Numbers"])
@@ -135,6 +133,16 @@ if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
             
             st.dataframe(filtered_df_e, use_container_width=True)
             
+            # Download Email Button
+            csv_emails = filtered_df_e.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Extracted Emails as CSV",
+                data=csv_emails,
+                file_name="extracted_emails.csv",
+                mime="text/csv",
+                type="secondary"
+            )
+            
             st.markdown("---")
             st.subheader("📋 Copy Email List")
             email_list_str = "\n".join(filtered_df_e['Email Address'].tolist())
@@ -149,6 +157,16 @@ if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
             st.success(f"Found {len(df_p)} total phone/contact numbers!")
             
             st.dataframe(df_p, use_container_width=True)
+            
+            # Download Phone Button
+            csv_phones = df_p.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Contact Numbers as CSV",
+                data=csv_phones,
+                file_name="extracted_phone_numbers.csv",
+                mime="text/csv",
+                type="secondary"
+            )
             
             st.markdown("---")
             st.subheader("📋 Copy Phone List")

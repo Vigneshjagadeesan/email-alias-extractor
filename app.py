@@ -6,11 +6,10 @@ import re
 import pandas as pd
 import urllib.parse
 from urllib.parse import urlparse, urljoin
-import xml.etree.ElementTree as ET
 import streamlit.components.v1 as components
 
 st.set_page_config(
-    page_title="Website Email & Contact Extractor",
+    page_title="Deep Website Email & Contact Extractor",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -37,8 +36,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("Website Email & Contact Extractor")
-st.markdown("Extract ALL 100% accurate Email Addresses & Phone Numbers across target websites.")
+st.title("Deep Website Email & Contact Extractor")
+st.markdown("Extract ALL public Email Addresses & Phone Numbers across target websites with 100% deep crawling.")
 
 domains_input = st.text_area(
     "Enter Target Domains (One per line)", 
@@ -51,26 +50,28 @@ PHONE_PATTERN = r'(?:\+\d{1,3}[\s\-\.]?)?\(?\d{2,5}\)?[\s\-\.]?\d{3,5}[\s\-\.]?\
 
 COMMON_PATHS = [
     "", "/kontakt", "/contact", "/contact-us", "/impressum", 
-    "/rechtliche-hinweise", "/about", "/about-us", "/presse", 
-    "/privacy", "/help", "/terms", "/en/contact.html"
+    "/about", "/about-us", "/presse", "/privacy", "/help", "/terms", "/team"
 ]
 
-HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5'
+}
 
-def clean_and_decode_obfuscation(text):
+def decode_obfuscation(text):
     if not text:
         return ""
-    # Decode HTML Entities & Obfuscation like " [at] ", " (at) ", " [dot] "
     text = urllib.parse.unquote(text)
-    text = text.replace('&#64;', '@').replace('&commat;', '@')
+    text = text.replace('&#64;', '@').replace('&commat;', '@').replace('%40', '@')
     text = re.sub(r'[\s\[\(]at[\s\]\)]', '@', text, flags=re.IGNORECASE)
     text = re.sub(r'[\s\[\(]dot[\s\]\)]', '.', text, flags=re.IGNORECASE)
     return text
 
-async def fetch_url(session, url, semaphore):
+async def fetch_page(session, url, semaphore):
     async with semaphore:
         try:
-            async with session.get(url, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=4.0), ssl=False) as response:
+            async with session.get(url, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=5.0), ssl=False) as response:
                 if response.status == 200:
                     return url, await response.text()
         except Exception:
@@ -82,10 +83,10 @@ async def extract_from_domain(session, domain, semaphore):
     found_emails, found_phones = set(), set()
     urls_to_scrape = {f"{base_url}{p}" for p in COMMON_PATHS}
     
-    # 1. Fetch Main Page & Sitemap to discover real deep links
-    _, main_html = await fetch_url(session, base_url, semaphore)
+    # Discover internal links dynamically from Home Page
+    _, main_html = await fetch_page(session, base_url, semaphore)
     if main_html:
-        decoded_main = clean_and_decode_obfuscation(main_html)
+        decoded_main = decode_obfuscation(main_html)
         soup = BeautifulSoup(decoded_main, 'html.parser')
         
         for a_tag in soup.find_all('a', href=True):
@@ -95,30 +96,31 @@ async def extract_from_domain(session, domain, semaphore):
             
             if domain in parsed.netloc:
                 if not any(parsed.path.lower().endswith(ext) for ext in ['.pdf', '.jpg', '.png', '.gif', '.zip', '.css', '.js']):
-                    if any(k in parsed.path.lower() for k in ['kontakt', 'contact', 'impressum', 'about', 'presse', 'team', 'service']):
-                        urls_to_scrape.add(full_url)
+                    urls_to_scrape.add(full_url)
+                    if len(urls_to_scrape) >= 25: # Max 25 deep links per domain
+                        break
 
-    # 2. Concurrently Scrape Discovered Pages
-    tasks = [fetch_url(session, u, semaphore) for u in urls_to_scrape]
+    # Concurrently Scrape All Pages
+    tasks = [fetch_page(session, u, semaphore) for u in urls_to_scrape]
     results = await asyncio.gather(*tasks)
     
     for url, raw_html in results:
         if not raw_html:
             continue
             
-        html_content = clean_and_decode_obfuscation(raw_html)
+        html_content = decode_obfuscation(raw_html)
         soup = BeautifulSoup(html_content, 'html.parser')
         text_content = soup.get_text()
         
-        # Exact Email Extraction
+        # Email Extraction
         matches = re.findall(EMAIL_PATTERN, text_content)
         for email in matches:
             clean_email = email.lower().strip().strip('.')
-            if not any(clean_email.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.pdf', '.css', '.js']):
+            if not any(clean_email.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.pdf']):
                 found_emails.add(clean_email)
                 
         for a_tag in soup.find_all('a', href=True):
-            href = clean_and_decode_obfuscation(a_tag['href'])
+            href = decode_obfuscation(a_tag['href'])
             if 'mailto:' in href:
                 mail = href.replace('mailto:', '').split('?')[0].strip().lower()
                 if '@' in mail:
@@ -128,7 +130,7 @@ async def extract_from_domain(session, domain, semaphore):
                 if len(phone) >= 7:
                     found_phones.add(phone)
                     
-        # Exact Phone Extraction
+        # Phone Extraction
         phone_matches = re.findall(PHONE_PATTERN, text_content)
         for phone in phone_matches:
             clean_phone = phone.strip()
@@ -140,7 +142,7 @@ async def extract_from_domain(session, domain, semaphore):
 
 async def run_extraction(domains, progress_bar, status_text):
     all_emails, all_phones = [], []
-    semaphore = asyncio.Semaphore(20)
+    semaphore = asyncio.Semaphore(15)
     
     connector = aiohttp.TCPConnector(limit=100, ssl=False)
     async with aiohttp.ClientSession(connector=connector) as session:
@@ -156,7 +158,7 @@ async def run_extraction(domains, progress_bar, status_text):
             progress_bar.progress(completed / total_domains)
             status_text.text(f"Extracting Data: {completed}/{total_domains} Domains Processed...")
             
-            generic_prefixes = ['info', 'contact', 'kontakt', 'support', 'presse', 'service', 'help', 'sales', 'admin', 'office', 'post', 'mail', 'wohneigentum', 'landwirtschaft', 'wirtschaftsfoerderung']
+            generic_prefixes = ['info', 'contact', 'kontakt', 'support', 'presse', 'service', 'help', 'sales', 'admin', 'office', 'post', 'mail']
             
             for email in emails:
                 prefix = email.split('@')[0]
@@ -214,7 +216,7 @@ if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
             st.download_button(
                 label="📥 Download Extracted Emails (CSV)", 
                 data=filtered_df_e[['Target Domain', 'Email Address', 'Type']].to_csv(index=False).encode('utf-8'), 
-                file_name="exact_extracted_emails.csv", 
+                file_name="extracted_emails.csv", 
                 mime="text/csv"
             )
             
@@ -233,7 +235,7 @@ if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
             st.download_button(
                 label="📥 Download Contact Numbers (CSV)", 
                 data=df_p[['Target Domain', 'Phone Number']].to_csv(index=False).encode('utf-8'), 
-                file_name="exact_extracted_phone_numbers.csv", 
+                file_name="extracted_phone_numbers.csv", 
                 mime="text/csv"
             )
             

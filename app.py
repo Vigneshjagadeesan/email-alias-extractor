@@ -9,7 +9,7 @@ from urllib.parse import urlparse, urljoin
 import streamlit.components.v1 as components
 
 st.set_page_config(
-    page_title="Deep Website Email, Contact & Domain Extractor",
+    page_title="Domain Specific Email Alias & Contact Extractor",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -36,8 +36,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("Deep Website Email, Contact & Related Domain Extractor")
-st.markdown("Extract Emails, Phone Numbers, and Related External Domains found on the target website.")
+st.title("Domain Specific Email Alias & Contact Extractor")
+st.markdown("Extract exact **`@domain.com`** official email aliases and contacts from target website pages.")
 
 domains_input = st.text_area(
     "Enter Target Domains (One per line)", 
@@ -45,12 +45,11 @@ domains_input = st.text_area(
     height=140
 )
 
-EMAIL_PATTERN = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
 PHONE_PATTERN = r'(?:\+\d{1,3}[\s\-\.]?)?\(?\d{2,5}\)?[\s\-\.]?\d{3,5}[\s\-\.]?\d{3,5}'
 
 COMMON_PATHS = [
     "", "/kontakt", "/contact", "/contact-us", "/impressum", 
-    "/about", "/about-us", "/presse", "/privacy", "/help", "/terms", "/team"
+    "/about", "/about-us", "/presse", "/privacy", "/help", "/terms", "/team", "/en/contact.html"
 ]
 
 HEADERS = {
@@ -82,6 +81,12 @@ async def extract_from_domain(session, target_domain, semaphore):
     found_emails, found_phones, related_domains = set(), set(), set()
     urls_to_scrape = {f"{base_url}{p}" for p in COMMON_PATHS}
     
+    # Exact Dynamic Pattern for `@target_domain`
+    # E.g., for l-bank.de, pattern becomes: r'[a-zA-Z0-9._%+-]+@l-bank\.de'
+    clean_dom = re.escape(target_domain.replace("www.", ""))
+    STRICT_ALIAS_PATTERN = r'[a-zA-Z0-9._%+-]+@' + clean_dom
+    GENERIC_EMAIL_PATTERN = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+
     # Discover internal sub-pages from Home Page
     _, main_html = await fetch_page(session, base_url, semaphore)
     if main_html:
@@ -93,13 +98,11 @@ async def extract_from_domain(session, target_domain, semaphore):
             full_url = urljoin(base_url, href)
             parsed = urlparse(full_url)
             
-            # Check if internal link
             if target_domain in parsed.netloc:
                 if not any(parsed.path.lower().endswith(ext) for ext in ['.pdf', '.jpg', '.png', '.gif', '.zip', '.css', '.js']):
                     urls_to_scrape.add(full_url)
                     if len(urls_to_scrape) >= 25:
                         break
-            # Collect related external domains linked on the site
             elif parsed.netloc and target_domain not in parsed.netloc:
                 clean_netloc = parsed.netloc.replace("www.", "").strip()
                 if clean_netloc and "." in clean_netloc:
@@ -117,9 +120,15 @@ async def extract_from_domain(session, target_domain, semaphore):
         soup = BeautifulSoup(html_content, 'html.parser')
         text_content = soup.get_text()
         
-        # Email Extraction
-        matches = re.findall(EMAIL_PATTERN, text_content)
-        for email in matches:
+        # 1. First Strict Alias Extraction (`@domain.com`)
+        alias_matches = re.findall(STRICT_ALIAS_PATTERN, text_content, flags=re.IGNORECASE)
+        for email in alias_matches:
+            clean_email = email.lower().strip().strip('.')
+            found_emails.add(clean_email)
+            
+        # 2. General Email Extraction (All Emails on Page)
+        all_matches = re.findall(GENERIC_EMAIL_PATTERN, text_content)
+        for email in all_matches:
             clean_email = email.lower().strip().strip('.')
             if not any(clean_email.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.pdf']):
                 found_emails.add(clean_email)
@@ -173,7 +182,11 @@ async def run_extraction(domains, progress_bar, status_text):
             
             for email in emails:
                 prefix = email.split('@')[0]
-                category = "Official Department Alias" if (email.endswith(f"@{domain}") and any(p in prefix for p in generic_prefixes)) else ("Official Direct Staff Email" if email.endswith(f"@{domain}") else "External / Other Email")
+                if email.endswith(f"@{domain}"):
+                    category = "Official Department Alias (@" + domain + ")" if any(p in prefix for p in generic_prefixes) else "Official Direct Staff Email (@" + domain + ")"
+                else:
+                    category = "External Email"
+                    
                 gmail_link = f"https://mail.google.com/mail/?view=cm&fs=1&to={urllib.parse.quote(email)}"
                 all_emails.append({"Target Domain": domain, "Email Address": email, "Compose in Gmail": gmail_link, "Type": category})
                 
@@ -186,7 +199,7 @@ async def run_extraction(domains, progress_bar, status_text):
                 
     return all_emails, all_phones, all_related
 
-if st.button("Start Extraction", type="primary"):
+if st.button("Start Alias & Contact Extraction", type="primary"):
     raw_domains = [d.strip().replace("http://", "").replace("https://", "").strip("/") for d in domains_input.split("\n") if d.strip()]
     domains = list(dict.fromkeys(raw_domains))
     
@@ -224,15 +237,23 @@ if 'emails_df' in st.session_state or 'phones_df' in st.session_state or 'relate
         if 'emails_df' in st.session_state and not st.session_state['emails_df'].empty:
             df_e = st.session_state['emails_df'].copy()
             
-            type_filter = st.selectbox("Filter Emails by Type:", ["All Emails", "Official Department Alias", "Official Direct Staff Email", "External / Other Email"])
-            filtered_df_e = df_e if type_filter == "All Emails" else df_e[df_e['Type'] == type_filter]
+            type_filter = st.selectbox("Filter Emails by Type:", ["All Emails", "Official Department Alias", "Official Direct Staff Email", "External Email"])
+            
+            if type_filter == "All Emails":
+                filtered_df_e = df_e
+            elif type_filter == "Official Department Alias":
+                filtered_df_e = df_e[df_e['Type'].str.contains("Official Department Alias")]
+            elif type_filter == "Official Direct Staff Email":
+                filtered_df_e = df_e[df_e['Type'].str.contains("Official Direct Staff Email")]
+            else:
+                filtered_df_e = df_e[df_e['Type'] == "External Email"]
             
             st.dataframe(filtered_df_e, column_config={"Compose in Gmail": st.column_config.LinkColumn("Open Gmail Compose", display_text="Compose")}, use_container_width=True)
             
             st.download_button(
                 label="📥 Download Extracted Emails (CSV)", 
                 data=filtered_df_e[['Target Domain', 'Email Address', 'Type']].to_csv(index=False).encode('utf-8'), 
-                file_name="extracted_emails.csv", 
+                file_name="extracted_domain_aliases.csv", 
                 mime="text/csv"
             )
             

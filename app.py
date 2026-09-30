@@ -9,7 +9,7 @@ from urllib.parse import urlparse, urljoin
 import streamlit.components.v1 as components
 
 st.set_page_config(
-    page_title="Deep Website Email & Contact Extractor",
+    page_title="Deep Website Email, Contact & Domain Extractor",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -36,8 +36,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("Deep Website Email & Contact Extractor")
-st.markdown("Extract ALL public Email Addresses & Phone Numbers across target websites with 100% deep crawling.")
+st.title("Deep Website Email, Contact & Related Domain Extractor")
+st.markdown("Extract Emails, Phone Numbers, and Related External Domains found on the target website.")
 
 domains_input = st.text_area(
     "Enter Target Domains (One per line)", 
@@ -55,8 +55,7 @@ COMMON_PATHS = [
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.5'
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
 }
 
 def decode_obfuscation(text):
@@ -78,12 +77,12 @@ async def fetch_page(session, url, semaphore):
             pass
         return url, ""
 
-async def extract_from_domain(session, domain, semaphore):
-    base_url = f"https://{domain}"
-    found_emails, found_phones = set(), set()
+async def extract_from_domain(session, target_domain, semaphore):
+    base_url = f"https://{target_domain}"
+    found_emails, found_phones, related_domains = set(), set(), set()
     urls_to_scrape = {f"{base_url}{p}" for p in COMMON_PATHS}
     
-    # Discover internal links dynamically from Home Page
+    # Discover internal sub-pages from Home Page
     _, main_html = await fetch_page(session, base_url, semaphore)
     if main_html:
         decoded_main = decode_obfuscation(main_html)
@@ -94,13 +93,19 @@ async def extract_from_domain(session, domain, semaphore):
             full_url = urljoin(base_url, href)
             parsed = urlparse(full_url)
             
-            if domain in parsed.netloc:
+            # Check if internal link
+            if target_domain in parsed.netloc:
                 if not any(parsed.path.lower().endswith(ext) for ext in ['.pdf', '.jpg', '.png', '.gif', '.zip', '.css', '.js']):
                     urls_to_scrape.add(full_url)
-                    if len(urls_to_scrape) >= 25: # Max 25 deep links per domain
+                    if len(urls_to_scrape) >= 25:
                         break
+            # Collect related external domains linked on the site
+            elif parsed.netloc and target_domain not in parsed.netloc:
+                clean_netloc = parsed.netloc.replace("www.", "").strip()
+                if clean_netloc and "." in clean_netloc:
+                    related_domains.add(clean_netloc)
 
-    # Concurrently Scrape All Pages
+    # Scrape all discovered pages
     tasks = [fetch_page(session, u, semaphore) for u in urls_to_scrape]
     results = await asyncio.gather(*tasks)
     
@@ -129,6 +134,12 @@ async def extract_from_domain(session, domain, semaphore):
                 phone = href.replace('tel:', '').strip()
                 if len(phone) >= 7:
                     found_phones.add(phone)
+            else:
+                parsed = urlparse(href)
+                if parsed.netloc and target_domain not in parsed.netloc:
+                    clean_netloc = parsed.netloc.replace("www.", "").strip()
+                    if clean_netloc and "." in clean_netloc:
+                        related_domains.add(clean_netloc)
                     
         # Phone Extraction
         phone_matches = re.findall(PHONE_PATTERN, text_content)
@@ -138,10 +149,10 @@ async def extract_from_domain(session, domain, semaphore):
             if 7 <= len(digits_only) <= 15:
                 found_phones.add(clean_phone)
                 
-    return domain, found_emails, found_phones
+    return target_domain, found_emails, found_phones, related_domains
 
 async def run_extraction(domains, progress_bar, status_text):
-    all_emails, all_phones = [], []
+    all_emails, all_phones, all_related = [], [], []
     semaphore = asyncio.Semaphore(15)
     
     connector = aiohttp.TCPConnector(limit=100, ssl=False)
@@ -152,7 +163,7 @@ async def run_extraction(domains, progress_bar, status_text):
         tasks = [extract_from_domain(session, domain, semaphore) for domain in domains]
         
         for future in asyncio.as_completed(tasks):
-            domain, emails, phones = await future
+            domain, emails, phones, related = await future
             completed += 1
             
             progress_bar.progress(completed / total_domains)
@@ -170,7 +181,10 @@ async def run_extraction(domains, progress_bar, status_text):
                 clean_digits = re.sub(r'[^0-9+]', '', phone)
                 all_phones.append({"Target Domain": domain, "Phone Number": phone, "Click to Call": f"tel:{clean_digits}"})
                 
-    return all_emails, all_phones
+            for rel_dom in related:
+                all_related.append({"Source Domain": domain, "Related / Linked Domain": rel_dom, "Visit Website": f"https://{rel_dom}"})
+                
+    return all_emails, all_phones, all_related
 
 if st.button("Start Extraction", type="primary"):
     raw_domains = [d.strip().replace("http://", "").replace("https://", "").strip("/") for d in domains_input.split("\n") if d.strip()]
@@ -185,24 +199,26 @@ if st.button("Start Extraction", type="primary"):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        all_emails, all_phones = loop.run_until_complete(run_extraction(domains, progress_bar, status_text))
+        all_emails, all_phones, all_related = loop.run_until_complete(run_extraction(domains, progress_bar, status_text))
         
         status_text.text("Extraction Finished Successfully!")
         
         st.session_state['emails_df'] = pd.DataFrame(all_emails).drop_duplicates(subset=['Email Address']) if all_emails else pd.DataFrame()
         st.session_state['phones_df'] = pd.DataFrame(all_phones).drop_duplicates(subset=['Phone Number']) if all_phones else pd.DataFrame()
+        st.session_state['related_df'] = pd.DataFrame(all_related).drop_duplicates(subset=['Related / Linked Domain']) if all_related else pd.DataFrame()
         st.session_state['total_domains_scanned'] = len(domains)
 
 # --- DISPLAY SECTION ---
-if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
+if 'emails_df' in st.session_state or 'phones_df' in st.session_state or 'related_df' in st.session_state:
     st.markdown("---")
     
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Domains Scanned", st.session_state.get('total_domains_scanned', 0))
-    col2.metric("Total Emails Found", len(st.session_state['emails_df']) if 'emails_df' in st.session_state and not st.session_state['emails_df'].empty else 0)
-    col3.metric("Total Phone Numbers Found", len(st.session_state['phones_df']) if 'phones_df' in st.session_state and not st.session_state['phones_df'].empty else 0)
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Domains Scanned", st.session_state.get('total_domains_scanned', 0))
+    col2.metric("Emails Found", len(st.session_state['emails_df']) if 'emails_df' in st.session_state and not st.session_state['emails_df'].empty else 0)
+    col3.metric("Phones Found", len(st.session_state['phones_df']) if 'phones_df' in st.session_state and not st.session_state['phones_df'].empty else 0)
+    col4.metric("Related Domains", len(st.session_state['related_df']) if 'related_df' in st.session_state and not st.session_state['related_df'].empty else 0)
     
-    tab1, tab2 = st.tabs(["Extracted Emails", "Contact / Phone Numbers"])
+    tab1, tab2, tab3 = st.tabs(["Extracted Emails", "Contact / Phone Numbers", "🌐 Related Domains & Links"])
     
     with tab1:
         if 'emails_df' in st.session_state and not st.session_state['emails_df'].empty:
@@ -244,3 +260,18 @@ if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
             st.code("\n".join(df_p['Phone Number'].tolist()), language="text")
         else:
             st.warning("No phone/contact numbers were found.")
+
+    with tab3:
+        if 'related_df' in st.session_state and not st.session_state['related_df'].empty:
+            df_r = st.session_state['related_df'].copy()
+            
+            st.dataframe(df_r, column_config={"Visit Website": st.column_config.LinkColumn("Visit", display_text="Open Link")}, use_container_width=True)
+            
+            st.download_button(
+                label="📥 Download Related Domains (CSV)", 
+                data=df_r[['Source Domain', 'Related / Linked Domain']].to_csv(index=False).encode('utf-8'), 
+                file_name="related_domains.csv", 
+                mime="text/csv"
+            )
+        else:
+            st.warning("No external related domains were found.")

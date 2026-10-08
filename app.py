@@ -224,7 +224,7 @@ def process_single_url(args):
 
 # --- STEP 1: TARGET DOMAIN INPUT ---
 st.subheader("1. Target Domain Input")
-domains_input = st.text_area("Target Domains-ah Podu da (One per line)", value="editura-art.ro", height=80)
+domains_input = st.text_area("Target Domains (One per line)", value="editura-art.ro", height=80)
 
 if st.button("🔍 Generate Contact URLs"):
     domains = [d.strip().replace("http://", "").replace("https://", "").strip("/") for d in domains_input.split("\n") if d.strip()]
@@ -235,7 +235,7 @@ if st.button("🔍 Generate Contact URLs"):
         extracted_urls.extend(links)
         
     st.session_state['discovered_urls'] = "\n".join(list(dict.fromkeys(extracted_urls)))
-    st.success("Targeted URLs Generate aayiduchu! Step 2 check pannu da.")
+    st.success("Targeted URLs Generated check Step 2.")
 
 st.markdown("---")
 

@@ -45,50 +45,52 @@ col1, col2 = st.columns(2)
 with col1:
     enable_translation = st.checkbox("Auto-Translate Non-English content to English", value=True)
 with col2:
-    max_depth_links = st.slider("Max Links to Auto-Discover per domain", min_value=5, max_value=30, value=15)
+    max_depth_links = st.slider("Max Links to Auto-Discover per domain", min_value=5, max_value=30, value=20)
 
 EMAIL_PATTERN = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
 PHONE_PATTERN = r'(?:\+\d{1,3}[\s\-\.]?)?\(?\d{2,5}\)?[\s\-\.]?\d{3,5}[\s\-\.]?\d{3,5}'
 
-# Standard contact sub-paths across languages
-COMMON_CONTACT_PATHS = [
-    "", "/contact", "/contact-us", "/kontakt", "/impressum", 
-    "/about", "/about-us", "/presse", "/privacy", "/help", "/terms"
-]
-
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept-Language': 'en-US,en;q=0.9'
 }
 
-def discover_internal_links(domain, max_links=15):
-    """ Finds both pre-defined contact URLs and dynamically extracted internal links """
+CONTACT_KEYWORDS = ['contact', 'kontakt', 'about', 'impressum', 'reach', 'support', 'help', 'team', 'presse', 'privacy', 'terms', 'info', 'service']
+
+def discover_internal_links(domain, max_links=20):
+    """ Deep crawls homepage and extracts all contact-related internal sub-links """
     base_url = f"https://{domain}"
-    found_urls = set()
+    urls_to_visit = set([
+        base_url, 
+        f"{base_url}/contact", 
+        f"{base_url}/contact-us", 
+        f"{base_url}/kontakt", 
+        f"{base_url}/impressum", 
+        f"{base_url}/about"
+    ])
     
-    # Priority 1: Direct Contact Sub-paths
-    for path in COMMON_CONTACT_PATHS:
-        found_urls.add(f"{base_url}{path}")
-    
-    # Priority 2: Extract links dynamically from homepage
     try:
-        res = requests.get(base_url, headers=HEADERS, timeout=5)
+        res = requests.get(base_url, headers=HEADERS, timeout=6)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
+            
+            # Find all hyperlinks
             for a_tag in soup.find_all('a', href=True):
-                href = a_tag['href'].lower()
+                href = a_tag['href'].strip().lower()
                 full_url = urllib.parse.urljoin(base_url, a_tag['href'])
+                link_text = a_tag.get_text().strip().lower()
                 
-                # Check if link belongs to same domain
-                if domain in full_url and not any(ext in full_url for ext in ['.pdf', '.jpg', '.png', '.zip', '.jpeg']):
-                    # Give extra priority to links with 'contact' or 'about' keywords
-                    if any(kw in href for kw in ['contact', 'kontakt', 'about', 'impressum', 'reach', 'support']):
-                        found_urls.add(full_url)
-                    elif len(found_urls) < max_links:
-                        found_urls.add(full_url)
+                # Verify internal domain link
+                if domain in full_url and not any(ext in full_url for ext in ['.pdf', '.jpg', '.png', '.zip', '.jpeg', '.svg', '.webp']):
+                    # Check URL path or Button Text for contact keywords
+                    if any(kw in href or kw in link_text for kw in CONTACT_KEYWORDS):
+                        urls_to_visit.add(full_url)
+                    elif len(urls_to_visit) < max_links:
+                        urls_to_visit.add(full_url)
     except Exception:
         pass
         
-    return list(found_urls)
+    return list(urls_to_visit)
 
 def process_single_url(target_url):
     """ Scrapes a single URL, translates text if needed, and extracts emails & phones """
@@ -96,10 +98,10 @@ def process_single_url(target_url):
     found_phones = set()
     
     try:
-        res = requests.get(target_url, headers=HEADERS, timeout=5)
+        res = requests.get(target_url, headers=HEADERS, timeout=6)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
-            text_content = soup.get_text()
+            text_content = soup.get_text(separator=' ')
             
             # Auto Translation to English using deep-translator
             if enable_translation and text_content.strip():
@@ -118,15 +120,17 @@ def process_single_url(target_url):
                     found_emails.add(clean_email)
                     
             for a_tag in soup.find_all('a', href=True):
-                if 'mailto:' in a_tag['href']:
-                    mail = a_tag['href'].replace('mailto:', '').split('?')[0].strip().lower()
+                href = a_tag['href'].lower()
+                if 'mailto:' in href:
+                    mail = href.replace('mailto:', '').split('?')[0].strip()
                     if '@' in mail:
                         found_emails.add(mail)
                         
             # 2. Extract Phones
             for a_tag in soup.find_all('a', href=True):
-                if 'tel:' in a_tag['href']:
-                    phone = a_tag['href'].replace('tel:', '').strip()
+                href = a_tag['href'].lower()
+                if 'tel:' in href:
+                    phone = href.replace('tel:', '').strip()
                     if len(phone) >= 7:
                         found_phones.add(phone)
                         
@@ -151,11 +155,11 @@ if st.button("Start Deep Crawl & Extraction", type="primary"):
     status_text = st.empty()
     
     for domain in domains:
-        status_text.text(f"🔍 Crawling contact pages & internal links for {domain}...")
+        status_text.text(f"🔍 Deep scanning & discovering contact pages for {domain}...")
         
         urls_to_scrape = discover_internal_links(domain, max_links=max_depth_links)
         
-        status_text.text(f"⚡ Scraping & Translating {len(urls_to_scrape)} pages for {domain}...")
+        status_text.text(f"⚡ Scraping & Translating {len(urls_to_scrape)} found pages for {domain}...")
         
         domain_emails = set()
         domain_phones = set()

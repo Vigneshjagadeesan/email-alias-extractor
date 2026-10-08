@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom JavaScript to Disable Right Click & Inspect
+# Custom JavaScript
 components.html("""
     <script>
     document.addEventListener('contextmenu', function(e) { e.preventDefault(); }, false);
@@ -37,7 +37,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("Website Email & Contact Extractor")
-st.markdown("Step 1: Domain podu -> Step 2: Auto-discovered www URLs-ah Edit pannu -> Step 3: Deep Scrape, Deduplicate & Copy!")
+st.markdown("Step 1: Domain podu -> Step 2: Auto-discovered URLs-ah Edit pannu -> Step 3: Deep Scrape, Deduplicate & Copy!")
 
 if 'discovered_urls' not in st.session_state:
     st.session_state['discovered_urls'] = ""
@@ -45,60 +45,71 @@ if 'discovered_urls' not in st.session_state:
 EMAIL_PATTERN = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
 PHONE_PATTERN = r'(?:\+\d{1,3}[\s\-\.]?)?\(?\d{2,5}\)?[\s\-\.]?\d{3,5}[\s\-\.]?\d{3,5}'
 
+# Advanced Headers to bypass anti-bot checks (Cloudflare / WAF)
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept-Language': 'en-US,en;q=0.9'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Sec-Ch-Ua': '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1'
 }
 
-CONTACT_KEYWORDS = ['contact', 'kontakt', 'about', 'impressum', 'reach', 'support', 'help', 'team', 'presse', 'privacy', 'terms', 'info', 'service']
+CONTACT_KEYWORDS = ['contact', 'kontakt', 'about', 'impressum', 'reach', 'support', 'help', 'team', 'presse', 'privacy', 'terms', 'info', 'service', 'despre', 'termeni']
 
-def format_www_url(url, domain):
-    """ Correct-a https://www.domain.com/path format-ku convert pannum """
-    clean_domain = domain.replace("www.", "")
-    www_domain = f"www.{clean_domain}"
-    
-    if "://" in url:
-        parsed = urllib.parse.urlparse(url)
-        netloc = parsed.netloc.replace(clean_domain, www_domain)
-        if not netloc.startswith("www.") and not netloc.startswith("http"):
-            netloc = f"www.{netloc}"
-        return urllib.parse.urlunparse((parsed.scheme or 'https', netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
-    else:
-        path = url if url.startswith('/') else f"/{url}"
-        return f"https://{www_domain}{path}"
+def safe_fetch_url(url):
+    """ Tries fetching URL; if fails, tries fallback without/with www """
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=8, allow_redirects=True)
+        if res.status_code == 200:
+            return res
+    except Exception:
+        pass
+
+    # Alternate Fallback Try
+    alt_url = url.replace("https://www.", "https://") if "https://www." in url else url.replace("https://", "https://www.")
+    try:
+        res = requests.get(alt_url, headers=HEADERS, timeout=8, allow_redirects=True)
+        if res.status_code == 200:
+            return res
+    except Exception:
+        pass
+
+    return None
 
 def discover_internal_links(domain, max_links=15):
-    clean_domain = domain.replace("www.", "")
-    base_url = f"https://www.{clean_domain}"
+    clean_domain = domain.replace("www.", "").strip("/")
+    base_url = f"https://{clean_domain}"
     
-    # Base URL (Home Page) and Common Paths
     urls_to_visit = set([
         base_url, 
         f"{base_url}/contact", 
         f"{base_url}/contact-us", 
         f"{base_url}/kontakt", 
         f"{base_url}/impressum", 
-        f"{base_url}/about"
+        f"{base_url}/about",
+        f"{base_url}/despre-noi"
     ])
     
-    try:
-        res = requests.get(base_url, headers=HEADERS, timeout=6)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            for a_tag in soup.find_all('a', href=True):
-                href = a_tag['href'].strip().lower()
-                full_url = urllib.parse.urljoin(base_url, a_tag['href'])
-                link_text = a_tag.get_text().strip().lower()
-                
-                if clean_domain in full_url and not any(ext in full_url for ext in ['.pdf', '.jpg', '.png', '.zip', '.jpeg', '.svg', '.webp']):
-                    formatted_url = format_www_url(full_url, clean_domain)
-                    if any(kw in href or kw in link_text for kw in CONTACT_KEYWORDS):
-                        urls_to_visit.add(formatted_url)
-                    elif len(urls_to_visit) < max_links:
-                        urls_to_visit.add(formatted_url)
-    except Exception:
-        pass
-        
+    res = safe_fetch_url(base_url)
+    if res and res.status_code == 200:
+        soup = BeautifulSoup(res.text, 'html.parser')
+        for a_tag in soup.find_all('a', href=True):
+            href = a_tag['href'].strip().lower()
+            full_url = urllib.parse.urljoin(base_url, a_tag['href'])
+            link_text = a_tag.get_text().strip().lower()
+            
+            if clean_domain in full_url and not any(ext in full_url for ext in ['.pdf', '.jpg', '.png', '.zip', '.jpeg', '.svg', '.webp']):
+                if any(kw in href or kw in link_text for kw in CONTACT_KEYWORDS):
+                    urls_to_visit.add(full_url)
+                elif len(urls_to_visit) < max_links:
+                    urls_to_visit.add(full_url)
+                    
     return list(urls_to_visit)
 
 def process_single_url(args):
@@ -106,72 +117,68 @@ def process_single_url(args):
     found_emails = set()
     found_phones = set()
     
-    try:
-        res = requests.get(target_url, headers=HEADERS, timeout=6)
-        if res.status_code == 200:
-            soup = BeautifulSoup(res.text, 'html.parser')
-            text_content = soup.get_text(separator=' ')
-            
-            # Auto Translation to English using deep-translator
-            if enable_trans and text_content.strip():
-                try:
-                    translated_text = GoogleTranslator(source='auto', target='en').translate(text_content[:2000])
-                    if translated_text:
-                        text_content += " " + translated_text
-                except Exception:
-                    pass
-
-            # 1. Extract Emails
-            matches = re.findall(EMAIL_PATTERN, text_content)
-            for email in matches:
-                clean_email = email.lower().strip()
-                if not any(clean_email.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp']):
-                    found_emails.add(clean_email)
-                    
-            for a_tag in soup.find_all('a', href=True):
-                href = a_tag['href'].lower()
-                if 'mailto:' in href:
-                    mail = href.replace('mailto:', '').split('?')[0].strip()
-                    if '@' in mail:
-                        found_emails.add(mail)
-                        
-            # 2. Extract Phones
-            for a_tag in soup.find_all('a', href=True):
-                href = a_tag['href'].lower()
-                if 'tel:' in href:
-                    phone = href.replace('tel:', '').strip()
-                    if len(phone) >= 7:
-                        found_phones.add(phone)
-                        
-            phone_matches = re.findall(PHONE_PATTERN, text_content)
-            for phone in phone_matches:
-                clean_phone = phone.strip()
-                digits_only = re.sub(r'\D', '', clean_phone)
-                if 7 <= len(digits_only) <= 15:
-                    found_phones.add(clean_phone)
-                    
-    except Exception:
-        pass
+    res = safe_fetch_url(target_url)
+    if res and res.status_code == 200:
+        soup = BeautifulSoup(res.text, 'html.parser')
+        text_content = soup.get_text(separator=' ')
         
+        # Translation
+        if enable_trans and text_content.strip():
+            try:
+                translated_text = GoogleTranslator(source='auto', target='en').translate(text_content[:2000])
+                if translated_text:
+                    text_content += " " + translated_text
+            except Exception:
+                pass
+
+        # 1. Extract Emails via Regex
+        matches = re.findall(EMAIL_PATTERN, text_content)
+        for email in matches:
+            clean_email = email.lower().strip()
+            if not any(clean_email.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp']):
+                found_emails.add(clean_email)
+                
+        # Mailto Tags
+        for a_tag in soup.find_all('a', href=True):
+            href = a_tag['href'].lower()
+            if 'mailto:' in href:
+                mail = href.replace('mailto:', '').split('?')[0].strip()
+                if '@' in mail:
+                    found_emails.add(mail)
+                    
+        # 2. Extract Phones via Tel Tags & Regex
+        for a_tag in soup.find_all('a', href=True):
+            href = a_tag['href'].lower()
+            if 'tel:' in href:
+                phone = href.replace('tel:', '').strip()
+                if len(phone) >= 7:
+                    found_phones.add(phone)
+                    
+        phone_matches = re.findall(PHONE_PATTERN, text_content)
+        for phone in phone_matches:
+            clean_phone = phone.strip()
+            digits_only = re.sub(r'\D', '', clean_phone)
+            if 7 <= len(digits_only) <= 15:
+                found_phones.add(clean_phone)
+                
     return found_emails, found_phones
 
 # --- STEP 1: DOMAIN INPUT & URL DISCOVERY ---
 st.subheader("Step 1: Target Domain-ah Podu da")
-domains_input = st.text_area("Target Domains (One per line)", value="l-bank.de", height=80)
+domains_input = st.text_area("Target Domains (One per line)", value="editura-art.ro", height=80)
 
-if st.button("🔍 Find & Extract URLs with www"):
+if st.button("🔍 Find & Extract URLs"):
     domains = [d.strip().replace("http://", "").replace("https://", "").strip("/") for d in domains_input.split("\n") if d.strip()]
     extracted_urls = []
     
     status_box = st.empty()
     for domain in domains:
-        status_box.text(f"www links extract aagudhu for {domain}...")
+        status_box.text(f"Links extract aagudhu for {domain}...")
         links = discover_internal_links(domain)
         extracted_urls.extend(links)
         
-    # Unique URLs list
     st.session_state['discovered_urls'] = "\n".join(list(dict.fromkeys(extracted_urls)))
-    status_box.success("www URLs correct-a Generate aayiduchu! Step 2 check pannu da.")
+    status_box.success("URLs Generate aayiduchu! Step 2 check pannu da.")
 
 st.markdown("---")
 
@@ -179,7 +186,7 @@ st.markdown("---")
 st.subheader("Step 2: Generated URLs-ah Check/Edit Pannu da")
 
 urls_to_process = st.text_area(
-    "Target URLs (Home Page + Inner Contact Pages):", 
+    "Target URLs (Home Page + Inner Pages):", 
     value=st.session_state['discovered_urls'], 
     height=150
 )
@@ -198,7 +205,7 @@ if st.button("⚡ Start Scraping & Translating Selected URLs", type="primary"):
         all_phones = []
         
         status_text = st.empty()
-        status_text.text(f"{len(urls_list)} pages (Home page + Sub pages) scrape & translate aagudhu...")
+        status_text.text(f"{len(urls_list)} pages scrape & translate aagudhu...")
         
         task_args = [(url, enable_translation) for url in urls_list]
         
@@ -206,7 +213,7 @@ if st.button("⚡ Start Scraping & Translating Selected URLs", type="primary"):
             results = executor.map(process_single_url, task_args)
             
             for target_url, (emails, phones) in zip(urls_list, results):
-                generic_prefixes = ['info', 'contact', 'kontakt', 'support', 'presse', 'service', 'help', 'sales', 'admin', 'office', 'post', 'mail']
+                generic_prefixes = ['info', 'contact', 'kontakt', 'support', 'presse', 'service', 'help', 'sales', 'admin', 'office', 'post', 'mail', 'comenzi', 'redactie', 'librarii']
                 
                 for email in emails:
                     prefix = email.split('@')[0]
@@ -231,7 +238,6 @@ if st.button("⚡ Start Scraping & Translating Selected URLs", type="primary"):
 
         status_text.text("Extraction Complete!")
         
-        # Strict Deduplication by Email Address and Phone Number
         st.session_state['emails_df'] = pd.DataFrame(all_emails).drop_duplicates(subset=['Email Address']) if all_emails else pd.DataFrame()
         st.session_state['phones_df'] = pd.DataFrame(all_phones).drop_duplicates(subset=['Phone Number']) if all_phones else pd.DataFrame()
 
@@ -275,7 +281,6 @@ if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
         else:
             st.warning("Phone numbers edhum kidaikala da.")
             
-    # TAB 3: COMBINED SINGLE-CLICK COPY BOX
     with tab3:
         st.subheader("Copy All Emails & Phone Numbers")
         st.markdown("Use the copy button on the top-right corner of the code box below to copy everything in one click!")

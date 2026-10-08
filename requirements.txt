@@ -2,4 +2,4 @@ streamlit
 requests
 beautifulsoup4
 pandas
-googletrans==3.1.0a0
+deep-translator

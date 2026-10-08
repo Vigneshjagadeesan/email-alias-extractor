@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom JavaScript
+# Custom JavaScript to Disable Right Click & Inspect
 components.html("""
     <script>
     document.addEventListener('contextmenu', function(e) { e.preventDefault(); }, false);
@@ -37,7 +37,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("Website Email & Contact Extractor")
-st.markdown("Step 1: Domain podu -> Step 2: Auto-generated www URLs edit pannu -> Step 3: Scrape & Translate pannu!")
+st.markdown("Step 1: Domain podu -> Step 2: Auto-discovered www URLs-ah Edit pannu -> Step 3: Deep Scrape, Deduplicate & Copy!")
 
 if 'discovered_urls' not in st.session_state:
     st.session_state['discovered_urls'] = ""
@@ -71,6 +71,7 @@ def discover_internal_links(domain, max_links=15):
     clean_domain = domain.replace("www.", "")
     base_url = f"https://www.{clean_domain}"
     
+    # Base URL (Home Page) and Common Paths
     urls_to_visit = set([
         base_url, 
         f"{base_url}/contact", 
@@ -111,6 +112,7 @@ def process_single_url(args):
             soup = BeautifulSoup(res.text, 'html.parser')
             text_content = soup.get_text(separator=' ')
             
+            # Auto Translation to English using deep-translator
             if enable_trans and text_content.strip():
                 try:
                     translated_text = GoogleTranslator(source='auto', target='en').translate(text_content[:2000])
@@ -119,6 +121,7 @@ def process_single_url(args):
                 except Exception:
                     pass
 
+            # 1. Extract Emails
             matches = re.findall(EMAIL_PATTERN, text_content)
             for email in matches:
                 clean_email = email.lower().strip()
@@ -132,6 +135,7 @@ def process_single_url(args):
                     if '@' in mail:
                         found_emails.add(mail)
                         
+            # 2. Extract Phones
             for a_tag in soup.find_all('a', href=True):
                 href = a_tag['href'].lower()
                 if 'tel:' in href:
@@ -165,7 +169,8 @@ if st.button("🔍 Find & Extract URLs with www"):
         links = discover_internal_links(domain)
         extracted_urls.extend(links)
         
-    st.session_state['discovered_urls'] = "\n".join(extracted_urls)
+    # Unique URLs list
+    st.session_state['discovered_urls'] = "\n".join(list(dict.fromkeys(extracted_urls)))
     status_box.success("www URLs correct-a Generate aayiduchu! Step 2 check pannu da.")
 
 st.markdown("---")
@@ -174,7 +179,7 @@ st.markdown("---")
 st.subheader("Step 2: Generated URLs-ah Check/Edit Pannu da")
 
 urls_to_process = st.text_area(
-    "Target URLs (Format: https://www.domain.com/path):", 
+    "Target URLs (Home Page + Inner Contact Pages):", 
     value=st.session_state['discovered_urls'], 
     height=150
 )
@@ -193,7 +198,7 @@ if st.button("⚡ Start Scraping & Translating Selected URLs", type="primary"):
         all_phones = []
         
         status_text = st.empty()
-        status_text.text(f"{len(urls_list)} pages scrape & translate aagudhu...")
+        status_text.text(f"{len(urls_list)} pages (Home page + Sub pages) scrape & translate aagudhu...")
         
         task_args = [(url, enable_translation) for url in urls_list]
         
@@ -201,7 +206,6 @@ if st.button("⚡ Start Scraping & Translating Selected URLs", type="primary"):
             results = executor.map(process_single_url, task_args)
             
             for target_url, (emails, phones) in zip(urls_list, results):
-                domain_name = urllib.parse.urlparse(target_url).netloc
                 generic_prefixes = ['info', 'contact', 'kontakt', 'support', 'presse', 'service', 'help', 'sales', 'admin', 'office', 'post', 'mail']
                 
                 for email in emails:
@@ -227,17 +231,18 @@ if st.button("⚡ Start Scraping & Translating Selected URLs", type="primary"):
 
         status_text.text("Extraction Complete!")
         
+        # Strict Deduplication by Email Address and Phone Number
         st.session_state['emails_df'] = pd.DataFrame(all_emails).drop_duplicates(subset=['Email Address']) if all_emails else pd.DataFrame()
         st.session_state['phones_df'] = pd.DataFrame(all_phones).drop_duplicates(subset=['Phone Number']) if all_phones else pd.DataFrame()
 
 # --- DISPLAY RESULTS ---
 if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
-    tab1, tab2 = st.tabs(["Extracted Emails", "Contact / Phone Numbers"])
+    tab1, tab2, tab3 = st.tabs(["Extracted Emails", "Contact / Phone Numbers", "📋 Copy All Data (Single Click)"])
     
     with tab1:
         if 'emails_df' in st.session_state and not st.session_state['emails_df'].empty:
             df_e = st.session_state['emails_df'].copy()
-            st.success(f"Total-ah {len(df_e)} email addresses kedachirukku!")
+            st.success(f"Total Unique Email Addresses: {len(df_e)}")
             
             st.dataframe(
                 df_e,
@@ -255,7 +260,7 @@ if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
     with tab2:
         if 'phones_df' in st.session_state and not st.session_state['phones_df'].empty:
             df_p = st.session_state['phones_df'].copy()
-            st.success(f"Total-ah {len(df_p)} phone numbers kedachirukku!")
+            st.success(f"Total Unique Phone Numbers: {len(df_p)}")
             
             st.dataframe(
                 df_p,
@@ -269,3 +274,22 @@ if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
             st.download_button("Download Contacts (CSV)", data=csv_phones, file_name="extracted_phones.csv", mime="text/csv")
         else:
             st.warning("Phone numbers edhum kidaikala da.")
+            
+    # TAB 3: COMBINED SINGLE-CLICK COPY BOX
+    with tab3:
+        st.subheader("Copy All Emails & Phone Numbers")
+        st.markdown("Use the copy button on the top-right corner of the code box below to copy everything in one click!")
+        
+        combined_text = "=== EXTRACTED EMAILS ===\n"
+        if 'emails_df' in st.session_state and not st.session_state['emails_df'].empty:
+            combined_text += "\n".join(st.session_state['emails_df']['Email Address'].tolist())
+        else:
+            combined_text += "No emails found.\n"
+            
+        combined_text += "\n\n=== EXTRACTED PHONE NUMBERS ===\n"
+        if 'phones_df' in st.session_state and not st.session_state['phones_df'].empty:
+            combined_text += "\n".join(st.session_state['phones_df']['Phone Number'].tolist())
+        else:
+            combined_text += "No phone numbers found."
+            
+        st.code(combined_text, language="text")

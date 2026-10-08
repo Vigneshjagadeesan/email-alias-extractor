@@ -6,6 +6,7 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
 import streamlit.components.v1 as components
+from googletrans import Translator
 
 st.set_page_config(
     page_title="Website Email & Contact Extractor",
@@ -16,35 +17,11 @@ st.set_page_config(
 # Custom JavaScript to Disable Right Click & Inspect Element Shortcuts
 components.html("""
     <script>
-    // Disable Right Click
-    document.addEventListener('contextmenu', function(e) {
-        e.preventDefault();
-    }, false);
-
-    // Disable Keyboard Inspection Shortcuts
+    document.addEventListener('contextmenu', function(e) { e.preventDefault(); }, false);
     document.addEventListener('keydown', function(e) {
-        // F12 key
-        if (e.keyCode == 123) {
-            e.preventDefault();
-            return false;
-        }
-        // Ctrl+Shift+I (Inspect)
-        if (e.ctrlKey && e.shiftKey && e.keyCode == 73) {
-            e.preventDefault();
-            return false;
-        }
-        // Ctrl+Shift+J (Console)
-        if (e.ctrlKey && e.shiftKey && e.keyCode == 74) {
-            e.preventDefault();
-            return false;
-        }
-        // Ctrl+U (View Source)
-        if (e.ctrlKey && e.keyCode == 85) {
-            e.preventDefault();
-            return false;
-        }
-        // Ctrl+S (Save Page)
-        if (e.ctrlKey && e.keyCode == 83) {
+        if (e.keyCode == 123 || 
+           (e.ctrlKey && e.shiftKey && (e.keyCode == 73 || e.keyCode == 74)) || 
+           (e.ctrlKey && (e.keyCode == 85 || e.keyCode == 83))) {
             e.preventDefault();
             return false;
         }
@@ -52,71 +29,92 @@ components.html("""
     </script>
 """, height=0)
 
-# Custom CSS for Mobile & Desktop Responsive Design
+# Custom CSS
 st.markdown("""
     <style>
-    .main .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-        max-width: 100%;
-    }
-    .stButton>button {
-        width: 100%;
-        border-radius: 8px;
-        height: 3em;
-        font-weight: bold;
-    }
-    @media (max-width: 768px) {
-        .stTextArea textarea {
-            font-size: 14px;
-        }
-    }
+    .main .block-container { padding-top: 2rem; padding-bottom: 2rem; max-width: 100%; }
+    .stButton>button { width: 100%; border-radius: 8px; height: 3em; font-weight: bold; }
     </style>
 """, unsafe_allow_html=True)
 
 st.title("Website Email & Contact Extractor")
-st.markdown("Extract ALL public Email Addresses and Phone/Contact Numbers with mobile & desktop friendly one-click actions.")
+st.markdown("Deep scrape domains, auto-discover contact links, translate foreign languages to English, and extract contacts!")
 
-domains_input = st.text_area("Enter Target Domains (One per line)", value="l-bank.de", height=120)
+# User Inputs
+domains_input = st.text_area("Enter Target Domains (One per line)", value="l-bank.de", height=100)
+
+col1, col2 = st.columns(2)
+with col1:
+    enable_translation = st.checkbox("Auto-Translate Non-English content to English", value=True)
+with col2:
+    max_depth_links = st.slider("Max Links to Auto-Discover per domain", min_value=5, max_value=30, value=15)
 
 EMAIL_PATTERN = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
 PHONE_PATTERN = r'(?:\+\d{1,3}[\s\-\.]?)?\(?\d{2,5}\)?[\s\-\.]?\d{3,5}[\s\-\.]?\d{3,5}'
-
-SUB_PATHS = [
-    "", "/contact", "/contact-us", "/kontakt", "/impressum", 
-    "/about", "/about-us", "/presse", "/privacy", "/help", "/terms"
-]
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 }
 
-def fetch_and_extract_data(args):
-    domain, path = args
-    target_url = f"https://{domain}{path}"
+translator = Translator()
+
+def discover_internal_links(domain, max_links=15):
+    """ Automatically finds inner links & contact pages inside the domain """
+    base_url = f"https://{domain}"
+    found_urls = {base_url}
+    
+    try:
+        res = requests.get(base_url, headers=HEADERS, timeout=5)
+        if res.status_code == 200:
+            soup = BeautifulSoup(res.text, 'html.parser')
+            for a_tag in soup.find_all('a', href=True):
+                href = a_tag['href']
+                full_url = urllib.parse.urljoin(base_url, href)
+                
+                # Filter only internal domain links
+                if domain in full_url and not any(ext in full_url for ext in ['.pdf', '.jpg', '.png', '.zip']):
+                    found_urls.add(full_url)
+                    if len(found_urls) >= max_links:
+                        break
+    except Exception:
+        pass
+        
+    return list(found_urls)
+
+def process_single_url(target_url):
+    """ Scrapes a single URL, translates text if needed, and extracts emails & phones """
     found_emails = set()
     found_phones = set()
     
     try:
-        res = requests.get(target_url, headers=HEADERS, timeout=3)
+        res = requests.get(target_url, headers=HEADERS, timeout=5)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
             text_content = soup.get_text()
             
+            # Auto Translation to English if enabled
+            if enable_translation and text_content.strip():
+                try:
+                    # Translate sample/full text to English for better pattern detection
+                    translated = translator.translate(text_content[:3000], dest='en')
+                    text_content += " " + translated.text
+                except Exception:
+                    pass  # Fallback if translation API hits rate limits
+
             # 1. Extract Emails
             matches = re.findall(EMAIL_PATTERN, text_content)
             for email in matches:
                 clean_email = email.lower().strip()
                 if not any(clean_email.endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp']):
                     found_emails.add(clean_email)
-                
+                    
             for a_tag in soup.find_all('a', href=True):
                 if 'mailto:' in a_tag['href']:
                     mail = a_tag['href'].replace('mailto:', '').split('?')[0].strip().lower()
                     if '@' in mail:
                         found_emails.add(mail)
                         
-            # 2. Extract Phone Numbers
+            # 2. Extract Phones
             for a_tag in soup.find_all('a', href=True):
                 if 'tel:' in a_tag['href']:
                     phone = a_tag['href'].replace('tel:', '').strip()
@@ -135,33 +133,38 @@ def fetch_and_extract_data(args):
         
     return found_emails, found_phones
 
-if st.button("Start Extraction", type="primary"):
+if st.button("Start Deep Crawl & Extraction", type="primary"):
     domains = [d.strip().replace("http://", "").replace("https://", "").strip("/") for d in domains_input.split("\n") if d.strip()]
     
     all_emails = []
     all_phones = []
     
     status_text = st.empty()
-    status_text.text("Scanning website pages at high speed...")
     
     for domain in domains:
-        tasks = [(domain, path) for path in SUB_PATHS]
+        status_text.text(f"🔍 Crawling and discovering internal links for {domain}...")
+        
+        # Step 1: Auto discover all contact & internal pages
+        urls_to_scrape = discover_internal_links(domain, max_links=max_depth_links)
+        
+        status_text.text(f"⚡ Scraping & Translating {len(urls_to_scrape)} pages for {domain}...")
         
         domain_emails = set()
         domain_phones = set()
         
-        with ThreadPoolExecutor(max_workers=15) as executor:
-            results = executor.map(fetch_and_extract_data, tasks)
+        # Step 2: Multi-threaded scraping across discovered links
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            results = executor.map(process_single_url, urls_to_scrape)
             for emails, phones in results:
                 domain_emails.update(emails)
                 domain_phones.update(phones)
                 
         generic_prefixes = ['info', 'contact', 'kontakt', 'support', 'presse', 'service', 'help', 'sales', 'admin', 'office', 'post', 'mail']
         
-        # Email Classification & Link Generation
+        # Email Classification
         for email in domain_emails:
             prefix = email.split('@')[0]
-            if email.endswith(f"@{domain}"):
+            if domain in email:
                 category = "Official Department Alias" if any(p in prefix for p in generic_prefixes) else "Official Direct Staff Email"
             else:
                 category = "External / Other Email"
@@ -175,7 +178,7 @@ if st.button("Start Extraction", type="primary"):
                 "Type": category
             })
             
-        # Phone Numbers & Link Generation
+        # Phone Classification
         for phone in domain_phones:
             clean_digits = re.sub(r'[^0-9+]', '', phone)
             tel_link = f"tel:{clean_digits}"
@@ -185,17 +188,15 @@ if st.button("Start Extraction", type="primary"):
                 "Click to Call": tel_link
             })
 
-    status_text.text("Extraction Complete!")
+    status_text.text(" Extraction Complete!")
     
     st.session_state['emails_df'] = pd.DataFrame(all_emails).drop_duplicates(subset=['Email Address']) if all_emails else pd.DataFrame()
     st.session_state['phones_df'] = pd.DataFrame(all_phones).drop_duplicates(subset=['Phone Number']) if all_phones else pd.DataFrame()
 
-# --- DISPLAY TABS SECTION ---
+# --- DISPLAY RESULTS ---
 if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
-    
     tab1, tab2 = st.tabs(["Extracted Emails", "Contact / Phone Numbers"])
     
-    # EMAIL TAB
     with tab1:
         if 'emails_df' in st.session_state and not st.session_state['emails_df'].empty:
             df_e = st.session_state['emails_df'].copy()
@@ -209,59 +210,34 @@ if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
                 column_config={
                     "Compose in Gmail": st.column_config.LinkColumn(
                         "Open Gmail Compose",
-                        help="Click to open web Gmail compose tab with this email ID.",
                         display_text="Compose"
                     )
                 },
                 use_container_width=True
             )
             
-            # Download Button
             csv_emails = filtered_df_e[['Target Domain', 'Email Address', 'Type']].to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="Download Extracted Emails (CSV)",
-                data=csv_emails,
-                file_name="extracted_emails.csv",
-                mime="text/csv"
-            )
-            
-            st.markdown("---")
-            st.subheader("Copy Plain Email List")
-            email_list_str = "\n".join(filtered_df_e['Email Address'].tolist())
-            st.code(email_list_str, language="text")
+            st.download_button("Download Extracted Emails (CSV)", data=csv_emails, file_name="extracted_emails.csv", mime="text/csv")
         else:
-            st.warning("No email addresses were found.")
+            st.warning("No email addresses found.")
             
-    # PHONE TAB
     with tab2:
         if 'phones_df' in st.session_state and not st.session_state['phones_df'].empty:
             df_p = st.session_state['phones_df'].copy()
-            st.success(f"Found {len(df_p)} total phone/contact numbers!")
+            st.success(f"Found {len(df_p)} total phone numbers!")
             
             st.dataframe(
                 df_p,
                 column_config={
                     "Click to Call": st.column_config.LinkColumn(
                         "Call Number",
-                        help="Tap/click to trigger dialer on mobile or desktop phone app.",
                         display_text="Call"
                     )
                 },
                 use_container_width=True
             )
             
-            # Download Button
             csv_phones = df_p[['Target Domain', 'Phone Number']].to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="Download Contact Numbers (CSV)",
-                data=csv_phones,
-                file_name="extracted_phone_numbers.csv",
-                mime="text/csv"
-            )
-            
-            st.markdown("---")
-            st.subheader("Copy Plain Phone List")
-            phone_list_str = "\n".join(df_p['Phone Number'].tolist())
-            st.code(phone_list_str, language="text")
+            st.download_button("Download Contact Numbers (CSV)", data=csv_phones, file_name="extracted_phones.csv", mime="text/csv")
         else:
-            st.warning("No phone/contact numbers were found on the website pages.")
+            st.warning("No phone numbers found.")

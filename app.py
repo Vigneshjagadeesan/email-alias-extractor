@@ -166,7 +166,7 @@ if st.button("🔍 Generate Contact URLs"):
         extracted_urls.extend(links)
         
     st.session_state['discovered_urls'] = "\n".join(list(dict.fromkeys(extracted_urls)))
-    st.success("Targeted URLs Generate aayiduchu! Step 2 check pannu da.")
+    st.success("Targeted URLs Generated check Step 2.")
 
 st.markdown("---")
 

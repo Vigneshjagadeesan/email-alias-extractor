@@ -37,9 +37,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("Website Email & Contact Extractor")
-st.markdown("Step 1: Extract URLs from Domains -> Step 2: Edit URLs -> Step 3: Scrape & Translate!")
+st.markdown("Step 1: Domain podu -> Step 2: Auto-generated www URLs edit pannu -> Step 3: Scrape & Translate pannu!")
 
-# Setup Session State for Discovered URLs
 if 'discovered_urls' not in st.session_state:
     st.session_state['discovered_urls'] = ""
 
@@ -53,11 +52,29 @@ HEADERS = {
 
 CONTACT_KEYWORDS = ['contact', 'kontakt', 'about', 'impressum', 'reach', 'support', 'help', 'team', 'presse', 'privacy', 'terms', 'info', 'service']
 
+def format_www_url(url, domain):
+    """ Correct-a https://www.domain.com/path format-ku convert pannum """
+    clean_domain = domain.replace("www.", "")
+    www_domain = f"www.{clean_domain}"
+    
+    if "://" in url:
+        parsed = urllib.parse.urlparse(url)
+        netloc = parsed.netloc.replace(clean_domain, www_domain)
+        if not netloc.startswith("www.") and not netloc.startswith("http"):
+            netloc = f"www.{netloc}"
+        return urllib.parse.urlunparse((parsed.scheme or 'https', netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+    else:
+        path = url if url.startswith('/') else f"/{url}"
+        return f"https://{www_domain}{path}"
+
 def discover_internal_links(domain, max_links=15):
-    base_url = f"https://{domain}"
+    clean_domain = domain.replace("www.", "")
+    base_url = f"https://www.{clean_domain}"
+    
     urls_to_visit = set([
         base_url, 
         f"{base_url}/contact", 
+        f"{base_url}/contact-us", 
         f"{base_url}/kontakt", 
         f"{base_url}/impressum", 
         f"{base_url}/about"
@@ -72,11 +89,12 @@ def discover_internal_links(domain, max_links=15):
                 full_url = urllib.parse.urljoin(base_url, a_tag['href'])
                 link_text = a_tag.get_text().strip().lower()
                 
-                if domain in full_url and not any(ext in full_url for ext in ['.pdf', '.jpg', '.png', '.zip', '.jpeg', '.svg', '.webp']):
+                if clean_domain in full_url and not any(ext in full_url for ext in ['.pdf', '.jpg', '.png', '.zip', '.jpeg', '.svg', '.webp']):
+                    formatted_url = format_www_url(full_url, clean_domain)
                     if any(kw in href or kw in link_text for kw in CONTACT_KEYWORDS):
-                        urls_to_visit.add(full_url)
+                        urls_to_visit.add(formatted_url)
                     elif len(urls_to_visit) < max_links:
-                        urls_to_visit.add(full_url)
+                        urls_to_visit.add(formatted_url)
     except Exception:
         pass
         
@@ -134,29 +152,29 @@ def process_single_url(args):
     return found_emails, found_phones
 
 # --- STEP 1: DOMAIN INPUT & URL DISCOVERY ---
-st.subheader("Step 1: Enter Domain & Generate URLs")
+st.subheader("Step 1: Target Domain-ah Podu da")
 domains_input = st.text_area("Target Domains (One per line)", value="l-bank.de", height=80)
 
-if st.button("🔍 Find & Extract URLs from Domain"):
+if st.button("🔍 Find & Extract URLs with www"):
     domains = [d.strip().replace("http://", "").replace("https://", "").strip("/") for d in domains_input.split("\n") if d.strip()]
     extracted_urls = []
     
     status_box = st.empty()
     for domain in domains:
-        status_box.text(f"Extracting links for {domain}...")
+        status_box.text(f"www links extract aagudhu for {domain}...")
         links = discover_internal_links(domain)
         extracted_urls.extend(links)
         
     st.session_state['discovered_urls'] = "\n".join(extracted_urls)
-    status_box.success("URLs Generated Successfully! Check Step 2.")
+    status_box.success("www URLs correct-a Generate aayiduchu! Step 2 check pannu da.")
 
 st.markdown("---")
 
 # --- STEP 2: EDITABLE URL AREA & SCRAPING ---
-st.subheader("Step 2: Review/Edit Extracted URLs & Start Scraping")
+st.subheader("Step 2: Generated URLs-ah Check/Edit Pannu da")
 
 urls_to_process = st.text_area(
-    "Target URLs (Meeru ikkada URLs add/modify cheyochu):", 
+    "Target URLs (Format: https://www.domain.com/path):", 
     value=st.session_state['discovered_urls'], 
     height=150
 )
@@ -169,13 +187,13 @@ if st.button("⚡ Start Scraping & Translating Selected URLs", type="primary"):
     urls_list = [u.strip() for u in urls_to_process.split("\n") if u.strip()]
     
     if not urls_list:
-        st.error("Please enter at least one URL in Step 2!")
+        st.error("Atleast oru URL-avadhu Step 2 box-la irukkanum da!")
     else:
         all_emails = []
         all_phones = []
         
         status_text = st.empty()
-        status_text.text(f"Scraping & Translating {len(urls_list)} pages...")
+        status_text.text(f"{len(urls_list)} pages scrape & translate aagudhu...")
         
         task_args = [(url, enable_translation) for url in urls_list]
         
@@ -219,7 +237,7 @@ if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
     with tab1:
         if 'emails_df' in st.session_state and not st.session_state['emails_df'].empty:
             df_e = st.session_state['emails_df'].copy()
-            st.success(f"Found {len(df_e)} total email addresses!")
+            st.success(f"Total-ah {len(df_e)} email addresses kedachirukku!")
             
             st.dataframe(
                 df_e,
@@ -232,12 +250,12 @@ if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
             csv_emails = df_e[['Target URL', 'Email Address', 'Type']].to_csv(index=False).encode('utf-8')
             st.download_button("Download Emails (CSV)", data=csv_emails, file_name="extracted_emails.csv", mime="text/csv")
         else:
-            st.warning("No email addresses found.")
+            st.warning("Email addresses edhum kidaikala da.")
             
     with tab2:
         if 'phones_df' in st.session_state and not st.session_state['phones_df'].empty:
             df_p = st.session_state['phones_df'].copy()
-            st.success(f"Found {len(df_p)} total phone numbers!")
+            st.success(f"Total-ah {len(df_p)} phone numbers kedachirukku!")
             
             st.dataframe(
                 df_p,
@@ -250,4 +268,4 @@ if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
             csv_phones = df_p[['Target URL', 'Phone Number']].to_csv(index=False).encode('utf-8')
             st.download_button("Download Contacts (CSV)", data=csv_phones, file_name="extracted_phones.csv", mime="text/csv")
         else:
-            st.warning("No phone numbers found.")
+            st.warning("Phone numbers edhum kidaikala da.")

@@ -29,10 +29,28 @@ components.html("""
     </script>
 """, height=0)
 
+# Custom CSS to Hide Footer, Header, Profile Badge & Toolbar
 st.markdown("""
     <style>
-    .main .block-container { padding-top: 2rem; padding-bottom: 2rem; max-width: 100%; }
-    .stButton>button { width: 100%; border-radius: 8px; height: 3em; font-weight: bold; }
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    
+    .stAppDeployButton, [data-testid="stStatusWidget"], [data-testid="stDecoration"], [data-testid="stToolbar"] {
+        display: none !important;
+    }
+    
+    .main .block-container { 
+        padding-top: 2rem; 
+        padding-bottom: 2rem; 
+        max-width: 100%; 
+    }
+    .stButton>button { 
+        width: 100%; 
+        border-radius: 8px; 
+        height: 3em; 
+        font-weight: bold; 
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -57,7 +75,6 @@ TARGET_CONTACT_PATHS = [
 ]
 
 def decode_cloudflare_email(cfHex):
-    """ Decodes Cloudflare obfuscated/protected email strings """
     try:
         r = int(cfHex[:2], 16)
         email = ''.join([chr(int(cfHex[i:i+2], 16) ^ r) for i in range(2, len(cfHex), 2)])
@@ -98,7 +115,6 @@ def process_single_url(args):
     if res and res.status_code == 200:
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 1. CLOUDFLARE DECRYPTION (Extract hidden emails)
         for cf_tag in soup.find_all(attrs={"data-cfemail": True}):
             hex_str = cf_tag['data-cfemail']
             decoded = decode_cloudflare_email(hex_str)
@@ -122,7 +138,6 @@ def process_single_url(args):
             except Exception:
                 pass
 
-        # 2. STANDARD REGEX EMAILS
         matches = re.findall(EMAIL_PATTERN, text_content)
         for email in matches:
             clean_email = email.lower().strip()
@@ -136,7 +151,6 @@ def process_single_url(args):
                 if '@' in mail:
                     found_emails.add(mail)
                     
-        # 3. PHONES EXTRACT
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href'].lower()
             if 'tel:' in href:
@@ -153,9 +167,8 @@ def process_single_url(args):
                 
     return found_emails, found_phones
 
-# --- STEP 1: TARGET DOMAIN INPUT ---
 st.subheader("1. Target Domain Input")
-domains_input = st.text_area("Target Domains (One per line)", value="editura-art.ro", height=80)
+domains_input = st.text_area("Target Domains-ah Podu da (One per line)", value="editura-art.ro", height=80)
 
 if st.button("🔍 Generate Contact URLs"):
     domains = [d.strip().replace("http://", "").replace("https://", "").strip("/") for d in domains_input.split("\n") if d.strip()]
@@ -166,11 +179,10 @@ if st.button("🔍 Generate Contact URLs"):
         extracted_urls.extend(links)
         
     st.session_state['discovered_urls'] = "\n".join(list(dict.fromkeys(extracted_urls)))
-    st.success("Targeted URLs Generated check Step 2.")
+    st.success("Targeted URLs Generate aayiduchu! Step 2 check pannu da.")
 
 st.markdown("---")
 
-# --- STEP 2: REFINED TARGET URLS ---
 st.subheader("2. Review & Refine Target Page URLs")
 
 urls_to_process = st.text_area(
@@ -230,7 +242,6 @@ if st.button("⚡ Start Deep Extraction", type="primary"):
         st.session_state['emails_df'] = pd.DataFrame(all_emails).drop_duplicates(subset=['Email Address']) if all_emails else pd.DataFrame()
         st.session_state['phones_df'] = pd.DataFrame(all_phones).drop_duplicates(subset=['Phone Number']) if all_phones else pd.DataFrame()
 
-# --- DISPLAY & COPY SECTION ---
 if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
     st.markdown("---")
     st.subheader("3. Extraction Results")

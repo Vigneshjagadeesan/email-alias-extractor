@@ -6,7 +6,7 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
 import streamlit.components.v1 as components
-from googletrans import Translator
+from deep_translator import GoogleTranslator
 
 st.set_page_config(
     page_title="Website Email & Contact Extractor",
@@ -56,8 +56,6 @@ HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 }
 
-translator = Translator()
-
 def discover_internal_links(domain, max_links=15):
     """ Automatically finds inner links & contact pages inside the domain """
     base_url = f"https://{domain}"
@@ -92,14 +90,14 @@ def process_single_url(target_url):
             soup = BeautifulSoup(res.text, 'html.parser')
             text_content = soup.get_text()
             
-            # Auto Translation to English if enabled
+            # Auto Translation to English using deep-translator
             if enable_translation and text_content.strip():
                 try:
-                    # Translate sample/full text to English for better pattern detection
-                    translated = translator.translate(text_content[:3000], dest='en')
-                    text_content += " " + translated.text
+                    translated_text = GoogleTranslator(source='auto', target='en').translate(text_content[:2000])
+                    if translated_text:
+                        text_content += " " + translated_text
                 except Exception:
-                    pass  # Fallback if translation API hits rate limits
+                    pass
 
             # 1. Extract Emails
             matches = re.findall(EMAIL_PATTERN, text_content)
@@ -144,7 +142,6 @@ if st.button("Start Deep Crawl & Extraction", type="primary"):
     for domain in domains:
         status_text.text(f"🔍 Crawling and discovering internal links for {domain}...")
         
-        # Step 1: Auto discover all contact & internal pages
         urls_to_scrape = discover_internal_links(domain, max_links=max_depth_links)
         
         status_text.text(f"⚡ Scraping & Translating {len(urls_to_scrape)} pages for {domain}...")
@@ -152,7 +149,6 @@ if st.button("Start Deep Crawl & Extraction", type="primary"):
         domain_emails = set()
         domain_phones = set()
         
-        # Step 2: Multi-threaded scraping across discovered links
         with ThreadPoolExecutor(max_workers=10) as executor:
             results = executor.map(process_single_url, urls_to_scrape)
             for emails, phones in results:
@@ -188,7 +184,7 @@ if st.button("Start Deep Crawl & Extraction", type="primary"):
                 "Click to Call": tel_link
             })
 
-    status_text.text(" Extraction Complete!")
+    status_text.text("Extraction Complete!")
     
     st.session_state['emails_df'] = pd.DataFrame(all_emails).drop_duplicates(subset=['Email Address']) if all_emails else pd.DataFrame()
     st.session_state['phones_df'] = pd.DataFrame(all_phones).drop_duplicates(subset=['Phone Number']) if all_phones else pd.DataFrame()

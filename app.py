@@ -14,74 +14,63 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Advanced JavaScript to Disable Right Click, Inspect, F12 & Shortcuts in Parent Window
+# Advanced JavaScript to Disable Right Click, Inspect & Hide Streamlit Cloud Profile Badge Completely
 components.html("""
     <script>
-    function disableInspect() {
-        const doc = window.parent.document;
+    function applyProtectionsAndHideBadge() {
+        try {
+            const doc = window.parent.document;
 
-        // Disable Right Click
-        doc.addEventListener('contextmenu', function(e) {
-            e.preventDefault();
-            return false;
-        }, true);
+            // 1. Force Hide Streamlit Cloud Bottom-Right Profile Badge & Popups
+            if (!doc.getElementById('hide-streamlit-badge-style')) {
+                const style = doc.createElement('style');
+                style.id = 'hide-streamlit-badge-style';
+                style.innerHTML = `
+                    [data-testid="stStatusWidget"],
+                    div[class*="viewerBadge"],
+                    div[class*="stActionButton"],
+                    .viewerBadge_container__1S-GK,
+                    .viewerBadge_link__1S-GK,
+                    iframe[title="streamlit_app"] ~ div,
+                    #MainMenu, footer, header {
+                        display: none !important;
+                        visibility: hidden !important;
+                        opacity: 0 !important;
+                        pointer-events: none !important;
+                    }
+                `;
+                doc.head.appendChild(style);
+            }
 
-        // Disable Keyboard Inspection Shortcuts
-        doc.addEventListener('keydown', function(e) {
-            // F12 key
-            if (e.keyCode == 123) {
+            // 2. Disable Right Click
+            doc.addEventListener('contextmenu', function(e) {
                 e.preventDefault();
                 return false;
-            }
-            // Ctrl+Shift+I (Inspect)
-            if (e.ctrlKey && e.shiftKey && e.keyCode == 73) {
-                e.preventDefault();
-                return false;
-            }
-            // Ctrl+Shift+J (Console)
-            if (e.ctrlKey && e.shiftKey && e.keyCode == 74) {
-                e.preventDefault();
-                return false;
-            }
-            // Ctrl+Shift+C (Inspect Element)
-            if (e.ctrlKey && e.shiftKey && e.keyCode == 67) {
-                e.preventDefault();
-                return false;
-            }
-            // Ctrl+U (View Source)
-            if (e.ctrlKey && e.keyCode == 85) {
-                e.preventDefault();
-                return false;
-            }
-            // Ctrl+S (Save Page)
-            if (e.ctrlKey && e.keyCode == 83) {
-                e.preventDefault();
-                return false;
-            }
-        }, true);
+            }, true);
+
+            // 3. Disable Inspection Shortcuts (F12, Ctrl+Shift+I, etc.)
+            doc.addEventListener('keydown', function(e) {
+                if (e.keyCode == 123 || 
+                   (e.ctrlKey && e.shiftKey && (e.keyCode == 73 || e.keyCode == 74 || e.keyCode == 67)) || 
+                   (e.ctrlKey && (e.keyCode == 85 || e.keyCode == 83))) {
+                    e.preventDefault();
+                    return false;
+                }
+            }, true);
+        } catch(e) {}
     }
 
-    // Execute script on parent window
-    try {
-        disableInspect();
-    } catch(e) {}
+    // Run repeatedly every 300ms to instantly wipe out dynamically loaded badge
+    setInterval(applyProtectionsAndHideBadge, 300);
     </script>
 """, height=0)
 
-# CSS to Hide Streamlit Badge/Footer and Disable Text Selection
+# CSS for Layout and Disabling Text Selection
 st.markdown("""
     <style>
-    /* Hide Streamlit Header, Footer, Menu & Profile Badge */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     header {visibility: hidden;}
-    .stApp > header {display: none !important;}
-    
-    /* Hide Streamlit Community Badge at Bottom Right */
-    [data-testid="stStatusWidget"] {display: none !important;}
-    .viewerBadge_container__1S-GK, .viewerBadge_link__1S-GK {display: none !important;}
-    iframe[title="streamlit_app"] ~ div {display: none !important;}
-    div[class*="viewerBadge"] {display: none !important;}
     
     .main .block-container {
         padding-top: 1.5rem;
@@ -95,7 +84,6 @@ st.markdown("""
         font-weight: bold;
     }
     
-    /* Disable User Text Selection */
     body {
         -webkit-user-select: none;
         -moz-user-select: none;
@@ -105,7 +93,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🌐 Professional Email & Contact Extractor")
+st.title("🌐 Professional Email & Contact Intelligence Extractor")
 st.markdown("Targeted deep web scraping with Cloudflare email decryption & auto-translation.")
 
 if 'discovered_urls' not in st.session_state:
@@ -126,7 +114,6 @@ TARGET_CONTACT_PATHS = [
 ]
 
 def decode_cloudflare_email(cfHex):
-    """ Decodes Cloudflare obfuscated/protected email strings """
     try:
         r = int(cfHex[:2], 16)
         email = ''.join([chr(int(cfHex[i:i+2], 16) ^ r) for i in range(2, len(cfHex), 2)])
@@ -167,7 +154,7 @@ def process_single_url(args):
     if res and res.status_code == 200:
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 1. Cloudflare Email Decryption
+        # Cloudflare Email Decryption
         for cf_tag in soup.find_all(attrs={"data-cfemail": True}):
             hex_str = cf_tag['data-cfemail']
             decoded = decode_cloudflare_email(hex_str)
@@ -191,7 +178,7 @@ def process_single_url(args):
             except Exception:
                 pass
 
-        # 2. Standard Regex Emails
+        # Standard Regex Emails
         matches = re.findall(EMAIL_PATTERN, text_content)
         for email in matches:
             clean_email = email.lower().strip()
@@ -205,7 +192,7 @@ def process_single_url(args):
                 if '@' in mail:
                     found_emails.add(mail)
                     
-        # 3. Phones Extraction
+        # Phones Extraction
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href'].lower()
             if 'tel:' in href:
@@ -235,7 +222,7 @@ if st.button("🔍 Generate Contact URLs"):
         extracted_urls.extend(links)
         
     st.session_state['discovered_urls'] = "\n".join(list(dict.fromkeys(extracted_urls)))
-    st.success("Targeted URLs Generated check Step 2.")
+    st.success("Targeted URLs Generated successfully!")
 
 st.markdown("---")
 
@@ -256,13 +243,13 @@ if st.button("⚡ Start Deep Extraction", type="primary"):
     urls_list = [u.strip() for u in urls_to_process.split("\n") if u.strip()]
     
     if not urls_list:
-        st.error("Atleast oru URL-avadhu Step 2 box-la irukkanum da!")
+        st.error("Please enter at least one URL!")
     else:
         all_emails = []
         all_phones = []
         
         status_text = st.empty()
-        status_text.text("Decrypting Cloudflare Protection & Scraping pages...")
+        status_text.text("Processing target pages...")
         
         task_args = [(url, enable_translation) for url in urls_list]
         
@@ -299,7 +286,7 @@ if st.button("⚡ Start Deep Extraction", type="primary"):
         st.session_state['emails_df'] = pd.DataFrame(all_emails).drop_duplicates(subset=['Email Address']) if all_emails else pd.DataFrame()
         st.session_state['phones_df'] = pd.DataFrame(all_phones).drop_duplicates(subset=['Phone Number']) if all_phones else pd.DataFrame()
 
-# --- DISPLAY & COPY SECTION ---
+# --- DISPLAY RESULTS ---
 if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
     st.markdown("---")
     st.subheader("3. Extraction Results")
@@ -326,12 +313,12 @@ if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
             csv_emails = df_e[['Target Domain', 'Email Address', 'Type']].to_csv(index=False).encode('utf-8')
             st.download_button("Download Emails CSV", data=csv_emails, file_name="extracted_emails.csv", mime="text/csv")
         else:
-            st.warning("Email addresses edhum kidaikala da.")
+            st.warning("No email addresses found.")
             
     with tab2:
         if 'phones_df' in st.session_state and not st.session_state['phones_df'].empty:
             df_p = st.session_state['phones_df'].copy()
-            st.success(f"Total Unique Contact Numbers Found: {len(df_p)}")
+            st.success(f"Total Unique Phone Numbers Found: {len(df_p)}")
             
             st.dataframe(
                 df_p,
@@ -348,4 +335,4 @@ if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
             csv_phones = df_p[['Target Domain', 'Phone Number']].to_csv(index=False).encode('utf-8')
             st.download_button("Download Contacts CSV", data=csv_phones, file_name="extracted_phones.csv", mime="text/csv")
         else:
-            st.warning("Phone numbers edhum kidaikala da.")
+            st.warning("No phone numbers found.")

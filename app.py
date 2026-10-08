@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom Security Script to disable right-click & inspect
+# Custom Security Script
 components.html("""
     <script>
     document.addEventListener('contextmenu', function(e) { e.preventDefault(); }, false);
@@ -37,7 +37,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🌐 Professional Email & Contact Intelligence Extractor")
-st.markdown("Targeted deep web scraping with multi-language auto-translation & quick actions.")
+st.markdown("Targeted deep web scraping with Cloudflare email decryption & auto-translation.")
 
 if 'discovered_urls' not in st.session_state:
     st.session_state['discovered_urls'] = ""
@@ -51,11 +51,19 @@ HEADERS = {
     'Accept-Language': 'en-US,en;q=0.9',
 }
 
-# Strictly Targeted Contact Sub-paths (Extra unwanted links varaadhu)
 TARGET_CONTACT_PATHS = [
     "", "/contact", "/contact-us", "/kontakt", "/impressum", 
     "/about", "/about-us", "/despre-noi"
 ]
+
+def decode_cloudflare_email(cfHex):
+    """ Decodes Cloudflare obfuscated/protected email strings """
+    try:
+        r = int(cfHex[:2], 16)
+        email = ''.join([chr(int(cfHex[i:i+2], 16) ^ r) for i in range(2, len(cfHex), 2)])
+        return email.lower().strip()
+    except Exception:
+        return None
 
 def safe_fetch_url(url):
     try:
@@ -78,8 +86,6 @@ def safe_fetch_url(url):
 def discover_internal_links(domain):
     clean_domain = domain.replace("www.", "").strip("/")
     base_url = f"https://{clean_domain}"
-    
-    # Strictly select only relevant contact URLs (No extra unwanted links)
     urls_to_visit = set([f"{base_url}{path}" for path in TARGET_CONTACT_PATHS])
     return list(urls_to_visit)
 
@@ -91,6 +97,21 @@ def process_single_url(args):
     res = safe_fetch_url(target_url)
     if res and res.status_code == 200:
         soup = BeautifulSoup(res.text, 'html.parser')
+        
+        # 1. CLOUDFLARE DECRYPTION (Extract hidden emails)
+        for cf_tag in soup.find_all(attrs={"data-cfemail": True}):
+            hex_str = cf_tag['data-cfemail']
+            decoded = decode_cloudflare_email(hex_str)
+            if decoded and '@' in decoded:
+                found_emails.add(decoded)
+                
+        for a_tag in soup.find_all('a', href=True):
+            if '/cdn-cgi/l/email-protection#' in a_tag['href']:
+                hex_str = a_tag['href'].split('#')[-1]
+                decoded = decode_cloudflare_email(hex_str)
+                if decoded and '@' in decoded:
+                    found_emails.add(decoded)
+
         text_content = soup.get_text(separator=' ')
         
         if enable_trans and text_content.strip():
@@ -101,7 +122,7 @@ def process_single_url(args):
             except Exception:
                 pass
 
-        # 1. Emails Extract
+        # 2. STANDARD REGEX EMAILS
         matches = re.findall(EMAIL_PATTERN, text_content)
         for email in matches:
             clean_email = email.lower().strip()
@@ -115,7 +136,7 @@ def process_single_url(args):
                 if '@' in mail:
                     found_emails.add(mail)
                     
-        # 2. Phones Extract
+        # 3. PHONES EXTRACT
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href'].lower()
             if 'tel:' in href:
@@ -172,7 +193,7 @@ if st.button("⚡ Start Deep Extraction", type="primary"):
         all_phones = []
         
         status_text = st.empty()
-        status_text.text("Target pages scrape & translate aagudhu...")
+        status_text.text("Decrypting Cloudflare Protection & Scraping pages...")
         
         task_args = [(url, enable_translation) for url in urls_list]
         
@@ -209,7 +230,7 @@ if st.button("⚡ Start Deep Extraction", type="primary"):
         st.session_state['emails_df'] = pd.DataFrame(all_emails).drop_duplicates(subset=['Email Address']) if all_emails else pd.DataFrame()
         st.session_state['phones_df'] = pd.DataFrame(all_phones).drop_duplicates(subset=['Phone Number']) if all_phones else pd.DataFrame()
 
-# --- PROFESSIONAL DISPLAY & COPY SECTION ---
+# --- DISPLAY & COPY SECTION ---
 if 'emails_df' in st.session_state or 'phones_df' in st.session_state:
     st.markdown("---")
     st.subheader("3. Extraction Results")

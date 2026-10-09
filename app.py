@@ -7,9 +7,6 @@ from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
 import streamlit.components.v1 as components
 from deep_translator import GoogleTranslator
-import easyocr
-from PIL import Image
-import io
 
 st.set_page_config(
     page_title="Professional Contact Extractor",
@@ -92,7 +89,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🌐 Professional Email & Contact Intelligence Extractor")
-st.markdown("Targeted deep web scraping with Cloudflare email decryption, Image OCR & auto-translation.")
+st.markdown("Targeted deep web scraping with Cloudflare email decryption & auto-translation.")
 
 if 'discovered_urls' not in st.session_state:
     st.session_state['discovered_urls'] = ""
@@ -110,10 +107,6 @@ TARGET_CONTACT_PATHS = [
     "", "/contact", "/contact-us", "/kontakt", "/impressum", 
     "/about", "/about-us", "/despre-noi", "/customer-service"
 ]
-
-@st.cache_resource
-def load_ocr_reader():
-    return easyocr.Reader(['en'], gpu=False)
 
 def decode_cloudflare_email(cfHex):
     try:
@@ -141,25 +134,6 @@ def safe_fetch_url(url):
 
     return None
 
-def extract_emails_from_images(soup, base_url, reader):
-    found_emails = set()
-    img_tags = soup.find_all('img', src=True)[:5] # Check top 5 images to keep it fast
-    for img in img_tags:
-        src = img['src'].lower()
-        if any(kw in src for kw in ['email', 'contact', 'mail', 'logo']):
-            img_url = urllib.parse.urljoin(base_url, img['src'])
-            try:
-                img_res = requests.get(img_url, headers=HEADERS, timeout=4)
-                if img_res.status_code == 200:
-                    results = reader.readtext(img_res.content)
-                    extracted_text = " ".join([text[1] for text in results])
-                    matches = re.findall(EMAIL_PATTERN, extracted_text)
-                    for e in matches:
-                        found_emails.add(e.lower().strip())
-            except Exception:
-                pass
-    return found_emails
-
 def discover_internal_links(domain):
     clean_domain = domain.replace("www.", "").strip("/")
     base_url = f"https://{clean_domain}"
@@ -167,7 +141,7 @@ def discover_internal_links(domain):
     return list(urls_to_visit)
 
 def process_single_url(args):
-    target_url, enable_trans, enable_ocr = args
+    target_url, enable_trans = args
     found_emails = set()
     found_phones = set()
     
@@ -175,7 +149,7 @@ def process_single_url(args):
     if res and res.status_code == 200:
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 1. Cloudflare Decryption
+        # 1. Cloudflare Email Decryption
         for cf_tag in soup.find_all(attrs={"data-cfemail": True}):
             hex_str = cf_tag['data-cfemail']
             decoded = decode_cloudflare_email(hex_str)
@@ -189,18 +163,9 @@ def process_single_url(args):
                 if decoded and '@' in decoded:
                     found_emails.add(decoded)
 
-        # 2. Image OCR Extraction (If Enabled)
-        if enable_ocr:
-            try:
-                reader = load_ocr_reader()
-                ocr_emails = extract_emails_from_images(soup, target_url, reader)
-                found_emails.update(ocr_emails)
-            except Exception:
-                pass
-
         text_content = soup.get_text(separator=' ')
         
-        # 3. Translation
+        # 2. Translation
         if enable_trans and text_content.strip():
             try:
                 translated_text = GoogleTranslator(source='auto', target='en').translate(text_content[:2000])
@@ -209,7 +174,7 @@ def process_single_url(args):
             except Exception:
                 pass
 
-        # 4. Standard Regex Emails
+        # 3. Standard Regex Emails
         matches = re.findall(EMAIL_PATTERN, text_content)
         for email in matches:
             clean_email = email.lower().strip()
@@ -223,7 +188,7 @@ def process_single_url(args):
                 if '@' in mail:
                     found_emails.add(mail)
                     
-        # 5. Phones Extraction
+        # 4. Phones Extraction
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href'].lower()
             if 'tel:' in href:
@@ -269,8 +234,6 @@ urls_to_process = st.text_area(
 col1, col2 = st.columns(2)
 with col1:
     enable_translation = st.checkbox("Auto-Translate Non-English content to English", value=True)
-with col2:
-    enable_ocr = st.checkbox("Enable Image OCR Email Scanner (Extract from images)", value=False)
 
 if st.button("⚡ Start Deep Extraction", type="primary"):
     urls_list = [u.strip() for u in urls_to_process.split("\n") if u.strip()]
@@ -284,7 +247,7 @@ if st.button("⚡ Start Deep Extraction", type="primary"):
         status_text = st.empty()
         status_text.text("Processing target pages & decrypting protection...")
         
-        task_args = [(url, enable_translation, enable_ocr) for url in urls_list]
+        task_args = [(url, enable_translation) for url in urls_list]
         
         with ThreadPoolExecutor(max_workers=8) as executor:
             results = executor.map(process_single_url, task_args)

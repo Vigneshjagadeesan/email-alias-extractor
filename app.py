@@ -7,6 +7,9 @@ from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
 import streamlit.components.v1 as components
 from deep_translator import GoogleTranslator
+import easyocr
+from PIL import Image
+import io
 
 st.set_page_config(
     page_title="Professional Contact Extractor",
@@ -14,14 +17,13 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Advanced JavaScript to Disable Right Click, Inspect & Hide Streamlit Cloud Profile Badge Completely
+# Advanced JavaScript to Disable Right Click, Inspect & Hide Streamlit Badge
 components.html("""
     <script>
     function applyProtectionsAndHideBadge() {
         try {
             const doc = window.parent.document;
 
-            // 1. Force Hide Streamlit Cloud Bottom-Right Profile Badge & Popups
             if (!doc.getElementById('hide-streamlit-badge-style')) {
                 const style = doc.createElement('style');
                 style.id = 'hide-streamlit-badge-style';
@@ -42,13 +44,11 @@ components.html("""
                 doc.head.appendChild(style);
             }
 
-            // 2. Disable Right Click
             doc.addEventListener('contextmenu', function(e) {
                 e.preventDefault();
                 return false;
             }, true);
 
-            // 3. Disable Inspection Shortcuts (F12, Ctrl+Shift+I, etc.)
             doc.addEventListener('keydown', function(e) {
                 if (e.keyCode == 123 || 
                    (e.ctrlKey && e.shiftKey && (e.keyCode == 73 || e.keyCode == 74 || e.keyCode == 67)) || 
@@ -60,12 +60,10 @@ components.html("""
         } catch(e) {}
     }
 
-    // Run repeatedly every 300ms to instantly wipe out dynamically loaded badge
     setInterval(applyProtectionsAndHideBadge, 300);
     </script>
 """, height=0)
 
-# CSS for Layout and Disabling Text Selection
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
@@ -94,7 +92,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🌐 Professional Email & Contact Intelligence Extractor")
-st.markdown("Targeted deep web scraping with Cloudflare email decryption & auto-translation.")
+st.markdown("Targeted deep web scraping with Cloudflare email decryption, Image OCR & auto-translation.")
 
 if 'discovered_urls' not in st.session_state:
     st.session_state['discovered_urls'] = ""
@@ -110,8 +108,12 @@ HEADERS = {
 
 TARGET_CONTACT_PATHS = [
     "", "/contact", "/contact-us", "/kontakt", "/impressum", 
-    "/about", "/about-us", "/despre-noi"
+    "/about", "/about-us", "/despre-noi", "/customer-service"
 ]
+
+@st.cache_resource
+def load_ocr_reader():
+    return easyocr.Reader(['en'], gpu=False)
 
 def decode_cloudflare_email(cfHex):
     try:
@@ -139,6 +141,25 @@ def safe_fetch_url(url):
 
     return None
 
+def extract_emails_from_images(soup, base_url, reader):
+    found_emails = set()
+    img_tags = soup.find_all('img', src=True)[:5] # Check top 5 images to keep it fast
+    for img in img_tags:
+        src = img['src'].lower()
+        if any(kw in src for kw in ['email', 'contact', 'mail', 'logo']):
+            img_url = urllib.parse.urljoin(base_url, img['src'])
+            try:
+                img_res = requests.get(img_url, headers=HEADERS, timeout=4)
+                if img_res.status_code == 200:
+                    results = reader.readtext(img_res.content)
+                    extracted_text = " ".join([text[1] for text in results])
+                    matches = re.findall(EMAIL_PATTERN, extracted_text)
+                    for e in matches:
+                        found_emails.add(e.lower().strip())
+            except Exception:
+                pass
+    return found_emails
+
 def discover_internal_links(domain):
     clean_domain = domain.replace("www.", "").strip("/")
     base_url = f"https://{clean_domain}"
@@ -146,7 +167,7 @@ def discover_internal_links(domain):
     return list(urls_to_visit)
 
 def process_single_url(args):
-    target_url, enable_trans = args
+    target_url, enable_trans, enable_ocr = args
     found_emails = set()
     found_phones = set()
     
@@ -154,7 +175,7 @@ def process_single_url(args):
     if res and res.status_code == 200:
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # Cloudflare Email Decryption
+        # 1. Cloudflare Decryption
         for cf_tag in soup.find_all(attrs={"data-cfemail": True}):
             hex_str = cf_tag['data-cfemail']
             decoded = decode_cloudflare_email(hex_str)
@@ -168,8 +189,18 @@ def process_single_url(args):
                 if decoded and '@' in decoded:
                     found_emails.add(decoded)
 
+        # 2. Image OCR Extraction (If Enabled)
+        if enable_ocr:
+            try:
+                reader = load_ocr_reader()
+                ocr_emails = extract_emails_from_images(soup, target_url, reader)
+                found_emails.update(ocr_emails)
+            except Exception:
+                pass
+
         text_content = soup.get_text(separator=' ')
         
+        # 3. Translation
         if enable_trans and text_content.strip():
             try:
                 translated_text = GoogleTranslator(source='auto', target='en').translate(text_content[:2000])
@@ -178,7 +209,7 @@ def process_single_url(args):
             except Exception:
                 pass
 
-        # Standard Regex Emails
+        # 4. Standard Regex Emails
         matches = re.findall(EMAIL_PATTERN, text_content)
         for email in matches:
             clean_email = email.lower().strip()
@@ -192,7 +223,7 @@ def process_single_url(args):
                 if '@' in mail:
                     found_emails.add(mail)
                     
-        # Phones Extraction
+        # 5. Phones Extraction
         for a_tag in soup.find_all('a', href=True):
             href = a_tag['href'].lower()
             if 'tel:' in href:
@@ -211,7 +242,7 @@ def process_single_url(args):
 
 # --- STEP 1: TARGET DOMAIN INPUT ---
 st.subheader("1. Target Domain Input")
-domains_input = st.text_area("Target Domains (One per line)", value="editura-art.ro", height=80)
+domains_input = st.text_area("Target Domains-ah Podu da (One per line)", value="editura-art.ro", height=80)
 
 if st.button("🔍 Generate Contact URLs"):
     domains = [d.strip().replace("http://", "").replace("https://", "").strip("/") for d in domains_input.split("\n") if d.strip()]
@@ -238,6 +269,8 @@ urls_to_process = st.text_area(
 col1, col2 = st.columns(2)
 with col1:
     enable_translation = st.checkbox("Auto-Translate Non-English content to English", value=True)
+with col2:
+    enable_ocr = st.checkbox("Enable Image OCR Email Scanner (Extract from images)", value=False)
 
 if st.button("⚡ Start Deep Extraction", type="primary"):
     urls_list = [u.strip() for u in urls_to_process.split("\n") if u.strip()]
@@ -249,11 +282,11 @@ if st.button("⚡ Start Deep Extraction", type="primary"):
         all_phones = []
         
         status_text = st.empty()
-        status_text.text("Processing target pages...")
+        status_text.text("Processing target pages & decrypting protection...")
         
-        task_args = [(url, enable_translation) for url in urls_list]
+        task_args = [(url, enable_translation, enable_ocr) for url in urls_list]
         
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=8) as executor:
             results = executor.map(process_single_url, task_args)
             
             for target_url, (emails, phones) in zip(urls_list, results):
